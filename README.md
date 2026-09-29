@@ -21,7 +21,11 @@ To try Binance USD-M Futures Testnet, set `EXCHANGE=binance` and fill `BINANCE_A
 python -m pytest
 python -m quantpilot.cli connection
 python -m quantpilot.cli signal
-python -m quantpilot.cli balance
+python -m quantpilot.cli balance`nstreamlit run quantpilot/dashboard.py
 ```
 
 `connection` and `signal` read public market data. `balance` checks the private API credentials without placing an order. `quantpilot.execution.ExecutionGate` is available for dry-run order simulations; it only sends an order when both `DRY_RUN=false` and `TRADING_ENABLED=true` are explicitly configured.
+
+
+The Streamlit dashboard is read-only and shows recent closed-bar prices, the current strategy signal, and a small cost-aware backtest summary.
+

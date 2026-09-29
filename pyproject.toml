@@ -15,6 +15,7 @@ dependencies = [
   "pydantic>=2.0",
   "pybit>=5.6",
   "loguru>=0.7",
+  "streamlit>=1.35",
 ]
 
 [project.optional-dependencies]
@@ -26,3 +27,6 @@ include = ["quantpilot*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+
+
