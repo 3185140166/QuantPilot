@@ -26,4 +26,4 @@ include = ["quantpilot*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"\n
+addopts = "-q"
