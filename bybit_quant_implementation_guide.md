@@ -1,5 +1,26 @@
 # Bybit 量化交易机器人：桌面端实现方案（Python + Testnet）
 
+> **文档定位：路线图与实施边界**
+> 本文是 QuantPilot 的 Bybit 量化交易 MVP 路线图。示例代码用于说明模块边界和实现顺序，落地前必须结合当前代码、Bybit 官方文档和 Testnet 行为逐项验证；阶段清单表示目标计划，不代表功能已经完成。
+
+## 当前状态
+
+- 项目默认使用 **Bybit Testnet**，先完成行情、策略、回测、风控、模拟执行和日志闭环。
+- 文档中的下单和回测片段属于初始示例，不能未经测试直接用于真实资金交易。
+- 策略必须使用已收盘的 K 线；下单前还要校验数量步长、价格精度、最小下单量、订单状态和持仓状态。
+
+## 安全与配置
+
+- `.env` 只保存本机运行所需的 Bybit 配置，例如 `BYBIT_API_KEY`、`BYBIT_API_SECRET` 和 `BYBIT_TESTNET=true`；不得提交到 Git 或写入日志。
+- `pat.env` 只保存 GitHub 远程仓库操作使用的 Personal Access Token，与 Bybit API key/secret 完全分开，也不得提交到仓库。
+- `api.md` 或其他文档中不得保存明文交易所密钥。若密钥曾经暴露，应立即在 Bybit 撤销并重新生成；新密钥仅授予 Read/Trade 权限，关闭提现并优先绑定 IP。
+
+## 实施边界
+
+- 默认只连接 Testnet；切换到主网必须是明确、单独的变更，并在运行前人工复核。
+- 进入真实资金交易前，至少需要完成含手续费、滑点和资金费的回测、稳定的 Testnet 运行、风险限额与熔断、止损止盈、订单幂等与成交确认、断线/重启恢复，以及完整的交易审计日志。
+- 遇到 API、网络、余额或持仓状态不确定时必须 fail closed：停止下单并记录原因。
+
 > 目标：在 Windows 桌面端从零实现一个可运行、可回测、可模拟交易、可扩展的 Bybit 量化交易项目。  
 > 第一阶段只使用 **Bybit Testnet**，不直接接入真实资金。  
 > 技术栈：Python 3.10+、Bybit V5 API、官方 `pybit` SDK、pandas、numpy、matplotlib、python-dotenv。

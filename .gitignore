@@ -10,5 +10,9 @@ venv/
 dist/
 build/
 .pytest_cache/
+.ruff_cache/
+*.egg-info/
+storage/logs/
+storage/*.csv
 .idea/
 .vscode/
