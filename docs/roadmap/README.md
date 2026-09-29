@@ -1,18 +1,18 @@
-# Roadmap
+# 开发路线
 
-## Current milestone
+## 当前阶段
 
-- Public market-data checks for Bybit and Binance.
-- Signed read-only balance checks.
-- Closed-bar EMA/RSI signal generation.
-- Basic cost-aware backtest.
-- Read-only local dashboard.
+- Bybit 和 Binance 公开行情检查。
+- 私有余额只读检查。
+- 已收盘 K 线上的 EMA/RSI 信号。
+- 基础手续费和滑点回测。
+- 本地只读研究仪表盘。
 
-## Next milestones
+## 后续阶段
 
-1. Historical kline downloader and local storage.
-2. Backtest metrics, reports, and out-of-sample validation.
-3. Paper-trading loop with one evaluation per closed candle.
-4. Testnet execution with instrument filters, order status, positions, and exchange-side protection.
-5. Restart recovery, reconciliation, rate limits, and audit logging.
-6. Only after those checks: a separately reviewed mainnet deployment.\n
+1. 历史 K 线下载和本地保存。
+2. 回测指标、报告和样本外验证。
+3. 每根收盘 K 线只执行一次的模拟交易循环。
+4. Testnet 下单、合约规则、订单状态、持仓和交易所止损保护。
+5. 重启恢复、仓位对账、限频和审计日志。
+6. 完成上述检查后，再单独评审主网部署。

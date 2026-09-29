@@ -1,11 +1,11 @@
-# Backtesting
+# 回测说明
 
-The current engine is a research MVP. It evaluates a signal on available history and enters on the next bar open, with fee and slippage parameters.
+当前回测引擎是研究用 MVP。它根据历史数据产生信号，在下一根 K 线开盘价模拟成交，并支持手续费和滑点参数。
 
-Run the test suite with:
+运行测试：
 
 ```powershell
 python -m pytest
 ```
 
-Before trusting results, add historical data storage, funding costs, stop-loss/take-profit simulation, quantity and leverage rules, equity curves, and out-of-sample validation. A profitable backtest is not evidence that live trading is safe.\n
+正式参考回测结果前，还需要加入历史数据保存、资金费、止损止盈、数量和杠杆规则、权益曲线以及样本外验证。回测盈利不能证明实盘交易安全。

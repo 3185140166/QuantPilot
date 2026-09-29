@@ -1,10 +1,10 @@
-# Dashboard
+# 可视化仪表盘
 
-Install the project and start the local read-only research page:
+安装项目并启动本地只读研究页面：
 
 ```powershell
 python -m pip install -e .
 streamlit run quantpilot/dashboard.py
 ```
 
-The page reads recent market data, displays the latest closed-bar price and signal, and shows a small backtest summary. It has no order controls and does not change `DRY_RUN` or `TRADING_ENABLED`.\n
+页面读取最近行情，展示最新已收盘价格、当前策略信号和基础回测摘要。页面没有下单控件，也不会修改 `DRY_RUN` 或 `TRADING_ENABLED`。

@@ -1,12 +1,12 @@
-# Strategy
+# 策略说明
 
-The current strategy is a deliberately small EMA/RSI crossover:
+当前策略是一个用于验证工程闭环的 EMA/RSI 交叉策略：
 
-- EMA fast: 20
-- EMA slow: 60
-- RSI: 14
-- LONG on a bullish EMA crossover with RSI below 70.
-- SHORT on a bearish EMA crossover with RSI above 30.
-- HOLD otherwise.
+- 快速 EMA：20
+- 慢速 EMA：60
+- RSI：14
+- 快线向上穿越慢线且 RSI 小于 70 时产生 LONG。
+- 快线向下穿越慢线且 RSI 大于 30 时产生 SHORT。
+- 其他情况返回 HOLD。
 
-The newest REST kline can still be forming. The strategy receives closed bars only, so signal evaluation does not use the active candle. A signal is not an order; risk and execution checks must run after it.\n
+REST 返回的最新 K 线可能仍在形成。策略只接收已收盘 K 线，因此不会使用当前未完成的蜡烛。信号不等于订单，信号产生后还必须经过风控和执行检查。

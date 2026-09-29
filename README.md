@@ -1,10 +1,10 @@
 # QuantPilot
 
-Project documentation: [docs/README.md](docs/README.md)
+项目文档入口：[docs/README.md](docs/README.md)
 
-QuantPilot is a testnet-first, multi-exchange quantitative trading research project. The first milestone is a closed-bar EMA/RSI strategy with cost-aware backtesting and safe market-data checks. Live trading is disabled by default.
+QuantPilot 是一个以测试网优先的多交易所量化研究项目。当前第一阶段包括已收盘 K 线策略、基础回测、风险计算、交易所只读连接和本地研究仪表盘。实盘交易默认关闭。
 
-## Setup
+## 安装
 
 ```powershell
 python -m venv .venv
@@ -13,20 +13,16 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Fill `.env` with a dedicated Bybit or Binance **Testnet** key. Keep `DRY_RUN=true` and `TRADING_ENABLED=false` while developing. Never commit `.env`, `pat.env`, or any file containing keys.
+请在 `.env` 中填写专用的 Bybit 或 Binance 测试网密钥。开发期间保持 `DRY_RUN=true` 和 `TRADING_ENABLED=false`。不要提交 `.env`、`pat.env` 或任何包含密钥的文件。
 
-To try Binance USD-M Futures Testnet, set `EXCHANGE=binance` and fill `BINANCE_API_KEY` and `BINANCE_API_SECRET` with keys created at `testnet.binancefuture.com`. Binance and Bybit credentials are separate.
-
-## Smoke checks
+## 常用检查
 
 ```powershell
 python -m pytest
 python -m quantpilot.cli connection
 python -m quantpilot.cli signal
-python -m quantpilot.cli balance`nstreamlit run quantpilot/dashboard.py
+python -m quantpilot.cli balance
+streamlit run quantpilot/dashboard.py
 ```
 
-`connection` and `signal` read public market data. `balance` checks the private API credentials without placing an order. `quantpilot.execution.ExecutionGate` is available for dry-run order simulations; it only sends an order when both `DRY_RUN=false` and `TRADING_ENABLED=true` are explicitly configured.
-
-
-The Streamlit dashboard is read-only and shows recent closed-bar prices, the current strategy signal, and a small cost-aware backtest summary.\n
+`connection` 和 `signal` 读取公开行情；`balance` 验证私有只读 API，不会下单。仪表盘是只读研究页面。
