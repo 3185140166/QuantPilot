@@ -47,6 +47,10 @@ class BybitClient:
         )
         return self._check(response)["result"]["list"][0]
 
+    def get_wallet_balance(self) -> dict[str, Any]:
+        response = self.session.get_wallet_balance(accountType="UNIFIED")
+        return self._check(response)
+
     def place_market(self, side: str, qty: str, reduce_only: bool = False) -> dict[str, Any]:
         self.settings.require_private_api()
         if side not in {"Buy", "Sell"}:

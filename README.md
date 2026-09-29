@@ -23,8 +23,10 @@ any file containing keys.
 python -m pytest
 python -m quantpilot.cli connection
 python -m quantpilot.cli signal
+python -m quantpilot.cli balance
 ```
 
-The CLI performs read-only market-data calls. `quantpilot.execution.ExecutionGate`
+`connection` and `signal` read public market data. `balance` checks the private
+API credentials without placing an order. `quantpilot.execution.ExecutionGate`
 is available for dry-run order simulations; it only sends an order when both
 `DRY_RUN=false` and `TRADING_ENABLED=true` are explicitly configured.

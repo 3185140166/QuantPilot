@@ -13,12 +13,16 @@ from .strategy import generate_signal
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["connection", "signal"])
+    parser.add_argument("command", choices=["connection", "signal", "balance"])
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     args = parser.parse_args()
     settings = Settings.from_env(args.env_file)
     try:
-        client = BybitClient(settings)
+        client = BybitClient(settings, require_private=args.command == "balance")
+        if args.command == "balance":
+            client.get_wallet_balance()
+            print(f"private API OK symbol={settings.symbol} testnet={settings.testnet}")
+            return
         frame = klines_to_frame(client.get_klines())
         if args.command == "connection":
             print(
