@@ -1,4 +1,5 @@
 pat.env
+api.md
 .env
 .env.*
 !.env.example
