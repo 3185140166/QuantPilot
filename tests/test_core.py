@@ -4,7 +4,11 @@ import pandas as pd
 
 from quantpilot.config import Settings
 from quantpilot.execution import ExecutionGate
-from quantpilot.market_data import closed_bars, klines_to_frame
+from quantpilot.market_data import (
+    binance_klines_to_frame,
+    closed_bars,
+    klines_to_frame,
+)
 from quantpilot.risk import calculate_position_size, round_step
 from quantpilot.strategy import generate_signal
 
@@ -21,15 +25,23 @@ def test_closed_bars_drops_latest_bar():
     assert frame.iloc[-1]["timestamp"] > frame.iloc[-2]["timestamp"]
 
 
+def test_binance_klines_are_normalized():
+    rows = [[0, "1", "2", "0.5", "1.5", "10", 60_000, "15", 3, "5", "7", "0"]]
+    frame = binance_klines_to_frame(rows)
+    assert frame.iloc[0]["close"] == 1.5
+    assert frame.iloc[0]["turnover"] == 15
+
+
 def test_strategy_holds_with_insufficient_history():
     assert generate_signal(pd.DataFrame({"close": [1, 2, 3]})) == "HOLD"
 
 
 def test_settings_defaults_are_safe(monkeypatch):
-    for key in ["BYBIT_TESTNET", "DRY_RUN", "TRADING_ENABLED", "LIVE_TRADING_CONFIRM"]:
+    for key in ["BYBIT_TESTNET", "BINANCE_TESTNET", "DRY_RUN", "TRADING_ENABLED", "LIVE_TRADING_CONFIRM"]:
         monkeypatch.delenv(key, raising=False)
     settings = Settings.from_env(env_file="missing.env")
     assert settings.testnet is True
+    assert settings.binance_testnet is True
     assert settings.dry_run is True
     assert settings.trading_enabled is False
 

@@ -29,6 +29,14 @@ def klines_to_frame(rows: list[list[Any]]) -> pd.DataFrame:
     return frame.sort_values("timestamp").reset_index(drop=True)
 
 
+def binance_klines_to_frame(rows: list[list[Any]]) -> pd.DataFrame:
+    """Normalize Binance USD-M kline arrays to the common schema."""
+    normalized = [
+        [row[0], row[1], row[2], row[3], row[4], row[5], row[7]] for row in rows
+    ]
+    return klines_to_frame(normalized)
+
+
 def closed_bars(frame: pd.DataFrame) -> pd.DataFrame:
     """Drop the newest bar, which can still be forming on REST responses."""
     if len(frame) < 2:

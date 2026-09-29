@@ -24,7 +24,11 @@ def _bool(name: str, value: str | None, default: bool) -> bool:
 class Settings:
     api_key: str | None
     api_secret: str | None
+    exchange: str = "bybit"
     testnet: bool = True
+    binance_api_key: str | None = None
+    binance_api_secret: str | None = None
+    binance_testnet: bool = True
     dry_run: bool = True
     trading_enabled: bool = False
     live_trading_confirm: str = ""
@@ -36,15 +40,23 @@ class Settings:
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> Settings:
-        # Explicit path makes startup independent of the process working directory.
         load_dotenv(dotenv_path=env_file, override=False)
+        exchange = os.getenv("EXCHANGE", "bybit").strip().lower()
+        if exchange not in {"bybit", "binance"}:
+            raise ValueError("EXCHANGE must be bybit or binance")
         testnet = _bool("BYBIT_TESTNET", os.getenv("BYBIT_TESTNET"), True)
+        binance_testnet = _bool(
+            "BINANCE_TESTNET", os.getenv("BINANCE_TESTNET"), True
+        )
         dry_run = _bool("DRY_RUN", os.getenv("DRY_RUN"), True)
         trading_enabled = _bool(
             "TRADING_ENABLED", os.getenv("TRADING_ENABLED"), False
         )
         confirmation = os.getenv("LIVE_TRADING_CONFIRM", "")
-        if not testnet and confirmation != "I_UNDERSTAND_LIVE_TRADING":
+        if (
+            (not testnet or not binance_testnet)
+            and confirmation != "I_UNDERSTAND_LIVE_TRADING"
+        ):
             raise ValueError(
                 "Mainnet requires LIVE_TRADING_CONFIRM="
                 "I_UNDERSTAND_LIVE_TRADING"
@@ -54,7 +66,11 @@ class Settings:
         return cls(
             api_key=os.getenv("BYBIT_API_KEY") or None,
             api_secret=os.getenv("BYBIT_API_SECRET") or None,
+            exchange=exchange,
             testnet=testnet,
+            binance_api_key=os.getenv("BINANCE_API_KEY") or None,
+            binance_api_secret=os.getenv("BINANCE_API_SECRET") or None,
+            binance_testnet=binance_testnet,
             dry_run=dry_run,
             trading_enabled=trading_enabled,
             live_trading_confirm=confirmation,
@@ -69,4 +85,11 @@ class Settings:
         if not self.api_key or not self.api_secret:
             raise ValueError(
                 "BYBIT_API_KEY and BYBIT_API_SECRET are required for private API calls"
+            )
+
+    def require_binance_private_api(self) -> None:
+        if not self.binance_api_key or not self.binance_api_secret:
+            raise ValueError(
+                "BINANCE_API_KEY and BINANCE_API_SECRET are required "
+                "for private API calls"
             )
