@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import streamlit as st
 
-from .backtest import run_backtest
-from .config import Settings
-from .exchange.binance import BinanceFuturesClient
-from .exchange.bybit import BybitClient
-from .market_data import binance_klines_to_frame, closed_bars, klines_to_frame
-from .metrics import report
-from .strategy import generate_signal
+from quantpilot.backtest import run_backtest
+from quantpilot.config import Settings
+from quantpilot.exchange.binance import BinanceFuturesClient
+from quantpilot.exchange.bybit import BybitClient
+from quantpilot.market_data import binance_klines_to_frame, closed_bars, klines_to_frame
+from quantpilot.metrics import report
+from quantpilot.strategy import generate_signal
 
 
 @st.cache_data(ttl=60)
@@ -56,3 +56,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
