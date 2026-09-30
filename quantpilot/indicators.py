@@ -19,7 +19,8 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
     avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    rs = avg_gain / avg_loss.where(avg_loss != 0)
     result = 100 - (100 / (1 + rs))
-    # A flat series has RSI 50 rather than NaN once enough bars exist.
-    return result.fillna(50.0)
+    result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    # Preserve warm-up NaNs; only a mature flat series is neutral.
+    return result.mask((avg_loss == 0) & (avg_gain == 0), 50.0)

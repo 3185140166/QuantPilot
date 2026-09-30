@@ -50,3 +50,15 @@ def test_execution_gate_does_not_submit_by_default():
     settings = Settings(api_key=None, api_secret=None)
     result = ExecutionGate(settings).market_order("Buy", "0.001")
     assert result["dryRun"] is True
+
+
+def test_backtest_curve_includes_initial_and_final_equity(monkeypatch):
+    from quantpilot.backtest import run_backtest
+
+    monkeypatch.setattr("quantpilot.backtest.generate_signals", lambda bars: pd.Series("LONG", index=bars.index))
+    bars = pd.DataFrame({"timestamp": range(65), "open": [100.0] * 65, "close": [100.0] * 64 + [90.0]})
+    result = run_backtest(bars, initial_equity=1000.0, quantity=1.0)
+    assert result.equity_curve.iloc[0] == 1000.0
+    assert result.equity_curve.iloc[-1] == result.final_equity
+    assert result.final_equity < 1000.0
+    assert abs(result.total_return - (result.final_equity / 1000.0 - 1)) < 1e-12
