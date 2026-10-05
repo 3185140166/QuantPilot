@@ -32,12 +32,20 @@ class BybitClient:
             )
         return response
 
-    def get_klines(self, limit: int = 200) -> list[list[Any]]:
+    def get_klines(
+        self, limit: int = 200, start: int | None = None, end: int | None = None
+    ) -> list[list[Any]]:
+        bounds = {}
+        if start is not None:
+            bounds["start"] = start
+        if end is not None:
+            bounds["end"] = end
         response = self.session.get_kline(
             category=self.settings.category,
             symbol=self.settings.symbol,
             interval=self.settings.interval,
             limit=limit,
+            **bounds,
         )
         return self._check(response)["result"]["list"]
 
@@ -47,11 +55,36 @@ class BybitClient:
         )
         return self._check(response)["result"]["list"][0]
 
+    def get_instruments(self) -> list[dict[str, Any]]:
+        """Read every instruments page; the linear catalog exceeds one page."""
+        instruments, seen = [], set()
+        cursor = ""
+        for _ in range(50):
+            params = {"category": self.settings.category, "limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            result = self._check(self.session.get_instruments_info(**params))["result"]
+            instruments.extend(result["list"])
+            cursor = result.get("nextPageCursor", "")
+            if not cursor:
+                return instruments
+            if cursor in seen:
+                raise RuntimeError("Bybit returned a repeated instruments cursor")
+            seen.add(cursor)
+        raise RuntimeError("Bybit instruments pagination exceeded its safety limit")
+
+    def get_tickers(self) -> list[dict[str, Any]]:
+        response = self.session.get_tickers(category=self.settings.category)
+        return self._check(response)["result"]["list"]
+
     def get_wallet_balance(self) -> dict[str, Any]:
         response = self.session.get_wallet_balance(accountType="UNIFIED")
         return self._check(response)
 
-    def place_market(self, side: str, qty: str, reduce_only: bool = False) -> dict[str, Any]:
+    def place_market(
+        self, side: str, qty: str, reduce_only: bool = False
+    ) -> dict[str, Any]:
+        self.settings.require_order_submission("bybit", qty)
         self.settings.require_private_api()
         if side not in {"Buy", "Sell"}:
             raise ValueError("side must be Buy or Sell")

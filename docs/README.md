@@ -13,6 +13,8 @@
 
 ## 功能文档
 
+- [私人量化平台](platform/README.md)：前后端、数据库、独立模拟引擎与异步回测。
+
 - [仪表盘](dashboard/README.md)：本地只读 Streamlit 研究页面。
 - [运维说明](operations/README.md)：运行命令、诊断方式和安全配置。
 - [参考指南](reference/README.md)：原始 Bybit 实现指南的说明。

@@ -194,7 +194,7 @@ def main():
     cols[0].metric("最新收盘价", f"{last.close:,.2f}", f"{change:+.2%} 较上一根")
     cols[1].metric("当前策略", signal)
     cols[2].metric("回测净收益率", f"{stats['total_return']:+.3%}")
-    cols[3].metric("已实现权益最大回撤", f"{stats['max_drawdown']:.3%}")
+    cols[3].metric("含浮盈亏权益最大回撤", f"{stats['max_drawdown']:.3%}")
     cols[4].metric(
         "回测成交 / 胜率", f"{int(stats['trades'])} / {stats['win_rate']:.0%}"
     )
@@ -223,11 +223,11 @@ def main():
     with research:
         left, right = st.columns([2, 1])
         with left:
-            st.subheader("回测已实现权益")
-            st.caption("固定数量交易；权益只在平仓时更新，未包含持仓浮动盈亏。")
+            st.subheader("回测权益（含浮动盈亏）")
+            st.caption("固定数量交易；每根收盘盯市，包含手续费与持仓浮动盈亏。")
             if not result.equity_curve.empty:
                 st.line_chart(result.equity_curve.rename("权益"), color="#62d9bc")
-                st.subheader("已实现权益回撤")
+                st.subheader("盯市权益回撤")
                 st.area_chart(
                     (
                         (result.equity_curve / result.equity_curve.cummax() - 1) * 100

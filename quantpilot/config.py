@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,12 +23,12 @@ def _bool(name: str, value: str | None, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    api_key: str | None
-    api_secret: str | None
+    api_key: str | None = field(repr=False)
+    api_secret: str | None = field(repr=False)
     exchange: str = "bybit"
     testnet: bool = True
-    binance_api_key: str | None = None
-    binance_api_secret: str | None = None
+    binance_api_key: str | None = field(default=None, repr=False)
+    binance_api_secret: str | None = field(default=None, repr=False)
     binance_testnet: bool = True
     dry_run: bool = True
     trading_enabled: bool = False
@@ -54,7 +55,7 @@ class Settings:
         )
         confirmation = os.getenv("LIVE_TRADING_CONFIRM", "")
         if (
-            (not testnet or not binance_testnet)
+            (not (testnet if exchange == "bybit" else binance_testnet))
             and confirmation != "I_UNDERSTAND_LIVE_TRADING"
         ):
             raise ValueError(
@@ -86,6 +87,19 @@ class Settings:
             raise ValueError(
                 "BYBIT_API_KEY and BYBIT_API_SECRET are required for private API calls"
             )
+
+    def require_order_submission(self, exchange: str, qty: str) -> None:
+        if self.dry_run or not self.trading_enabled:
+            raise ValueError("Exchange order submission is disabled")
+        testnet = self.testnet if exchange == "bybit" else self.binance_testnet
+        if not testnet and self.live_trading_confirm != "I_UNDERSTAND_LIVE_TRADING":
+            raise ValueError("Mainnet order submission requires explicit confirmation")
+        try:
+            quantity = Decimal(qty)
+        except InvalidOperation as exc:
+            raise ValueError("Quantity must be a finite positive decimal") from exc
+        if not quantity.is_finite() or quantity <= 0:
+            raise ValueError("Quantity must be a finite positive decimal")
 
     def require_binance_private_api(self) -> None:
         if not self.binance_api_key or not self.binance_api_secret:

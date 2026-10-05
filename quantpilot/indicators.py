@@ -24,3 +24,37 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
     # Preserve warm-up NaNs; only a mature flat series is neutral.
     return result.mask((avg_loss == 0) & (avg_gain == 0), 50.0)
+
+
+def atr(bars: pd.DataFrame, period: int = 14) -> pd.Series:
+    previous = bars.close.shift()
+    ranges = pd.concat(
+        [
+            bars.high - bars.low,
+            (bars.high - previous).abs(),
+            (bars.low - previous).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return ranges.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+
+
+def adx(bars: pd.DataFrame, period: int = 14) -> pd.Series:
+    up, down = bars.high.diff(), -bars.low.diff()
+    positive = up.where((up > down) & (up > 0), 0.0)
+    negative = down.where((down > up) & (down > 0), 0.0)
+    volatility = atr(bars, period).where(lambda values: values > 0)
+    plus = (
+        positive.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+        / volatility
+        * 100
+    )
+    minus = (
+        negative.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+        / volatility
+        * 100
+    )
+    total = plus + minus
+    dx = (plus - minus).abs() / total.where(total > 0) * 100
+    dx = dx.mask(total == 0, 0.0)
+    return dx.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()

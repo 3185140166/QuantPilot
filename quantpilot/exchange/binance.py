@@ -75,24 +75,57 @@ class BinanceFuturesClient:
     def get_server_time(self) -> dict[str, Any]:
         return self._request("GET", "/fapi/v1/time")
 
-    def get_klines(self, limit: int = 200) -> list[list[Any]]:
+    def get_klines(
+        self, limit: int = 200, start: int | None = None, end: int | None = None
+    ) -> list[list[Any]]:
         interval = self.settings.interval
-        if interval.isdigit():
-            interval += "m"
+        interval = {
+            "1": "1m",
+            "3": "3m",
+            "5": "5m",
+            "15": "15m",
+            "30": "30m",
+            "60": "1h",
+            "120": "2h",
+            "240": "4h",
+            "360": "6h",
+            "720": "12h",
+            "D": "1d",
+            "W": "1w",
+            "M": "1M",
+        }.get(interval, interval)
+        bounds = {}
+        if start is not None:
+            bounds["startTime"] = start
+        if end is not None:
+            bounds["endTime"] = end
         return self._request(
             "GET",
             "/fapi/v1/klines",
-            {"symbol": self.settings.symbol, "interval": interval, "limit": limit},
+            {
+                "symbol": self.settings.symbol,
+                "interval": interval,
+                "limit": limit,
+                **bounds,
+            },
         )
 
     def get_instrument(self) -> dict[str, Any]:
         payload = self._request("GET", "/fapi/v1/exchangeInfo")
         symbols = [
-            item for item in payload["symbols"] if item["symbol"] == self.settings.symbol
+            item
+            for item in payload["symbols"]
+            if item["symbol"] == self.settings.symbol
         ]
         if not symbols:
             raise RuntimeError(f"Binance symbol not found: {self.settings.symbol}")
         return symbols[0]
+
+    def get_instruments(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/fapi/v1/exchangeInfo")["symbols"]
+
+    def get_tickers(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/fapi/v1/ticker/24hr")
 
     def get_account(self) -> dict[str, Any]:
         return self._request("GET", "/fapi/v2/account", signed=True)
@@ -100,6 +133,7 @@ class BinanceFuturesClient:
     def place_market(
         self, side: str, qty: str, reduce_only: bool = False
     ) -> dict[str, Any]:
+        self.settings.require_order_submission("binance", qty)
         self.settings.require_binance_private_api()
         if side not in {"BUY", "SELL"}:
             raise ValueError("Binance side must be BUY or SELL")
