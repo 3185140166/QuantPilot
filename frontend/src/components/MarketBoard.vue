@@ -1,6 +1,14 @@
 <script setup lang="ts">
+import { ElAlert } from "element-plus/es/components/alert/index.mjs";
+import { ElButton } from "element-plus/es/components/button/index.mjs";
+import { ElInput } from "element-plus/es/components/input/index.mjs";
+import { ElPagination } from "element-plus/es/components/pagination/index.mjs";
+import { ElRadioButton } from "element-plus/es/components/radio/index.mjs";
+import { ElRadioGroup } from "element-plus/es/components/radio/index.mjs";
+import { ElTable } from "element-plus/es/components/table/index.mjs";
+import { ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { Refresh, Search, Star, StarFilled } from "@element-plus/icons-vue";
 import { request } from "../api";
 import type { Ticker, TickerSnapshot, WatchlistEntry } from "../types";
@@ -59,10 +67,11 @@ const visibleRows = computed(() =>
     page.value * pageSize.value,
   ),
 );
-function changeSort(value: { prop: string; order: string | null }) {
-  sort.value = value.order
-    ? { prop: value.prop, order: value.order }
-    : { prop: "turnover_24h", order: "descending" };
+function changeSort(value: { prop: string | null; order: string | null }) {
+  sort.value =
+    value.order && value.prop
+      ? { prop: value.prop, order: value.order }
+      : { prop: "turnover_24h", order: "descending" };
   page.value = 1;
 }
 watch([search, tab, pageSize, () => props.exchange], () => {

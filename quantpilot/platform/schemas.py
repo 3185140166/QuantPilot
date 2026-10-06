@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from quantpilot.selection import SelectionPolicy
+
 from .rules import StrategyRules
 
 
@@ -19,6 +21,13 @@ class MarketParameters(BaseModel):
         default="BTCUSDT", min_length=5, max_length=24, pattern=r"^[A-Z0-9]+USDT$"
     )
     interval: Literal["1", "5", "15", "30", "60", "240", "D"] = "15"
+
+    @model_validator(mode="after")
+    def multi_timeframe_interval(self):
+        rules = getattr(self, "rules", None)
+        if rules and rules.hourly_trend_filter and self.interval != "15":
+            raise ValueError("1小时方向过滤仅适用于15分钟入场，请将信号周期设为15分钟")
+        return self
 
 
 class StrategyCreate(MarketParameters):
@@ -42,6 +51,44 @@ class WatchlistCreate(BaseModel):
     symbol: str = Field(min_length=5, max_length=24, pattern=r"^[A-Z0-9]+USDT$")
 
 
+class OrderConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    qty_step: float = Field(gt=0)
+    min_qty: float = Field(gt=0)
+    max_qty: float = Field(gt=0)
+    min_notional: float = Field(ge=0)
+    tick_size: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.max_qty < self.min_qty:
+            raise ValueError("最大数量不能小于最小数量")
+        return self
+
+    def instrument(self):
+        return {
+            "lotSizeFilter": {
+                "qtyStep": self.qty_step,
+                "minOrderQty": self.min_qty,
+                "maxMktOrderQty": self.max_qty,
+                "minNotionalValue": self.min_notional,
+            },
+            "priceFilter": {"tickSize": self.tick_size},
+        }
+
+
+class RiskSizing(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    budget: float = Field(default=200, ge=10, le=100000)
+    cash_reserve_pct: float = Field(default=0, ge=0, le=90)
+    risk_per_trade_pct: float = Field(default=0.5, gt=0, le=1)
+    portfolio_risk_pct: float = Field(default=1, gt=0, le=2)
+    leverage: int = Field(default=2, ge=1, le=2)
+    daily_loss_pct: float = Field(default=2, gt=0, le=5)
+    max_drawdown_pct: float = Field(default=5, gt=0, le=10)
+    constraints: OrderConstraints
+
+
 class BacktestCreate(MarketParameters):
     evaluation_phase: Literal["research", "validation"] = "research"
     rules: StrategyRules = Field(default_factory=StrategyRules)
@@ -53,9 +100,16 @@ class BacktestCreate(MarketParameters):
     quantity: float = Field(default=0.001, ge=0.000001, le=1000)
     fee_rate: float = Field(default=0.00055, ge=0, le=0.1)
     slippage_bps: float = Field(default=2, ge=0, le=1000)
+    risk_sizing: RiskSizing | None = None
 
     @model_validator(mode="after")
     def validate_dates(self):
+        if self.risk_sizing and (
+            self.rules.stop_loss_pct <= 0
+            or self.risk_sizing.portfolio_risk_pct < self.risk_sizing.risk_per_trade_pct
+            or self.initial_equity > self.risk_sizing.budget
+        ):
+            raise ValueError("风险回测需要正数止损、有效组合风险及不超过预算的初始权益")
         if (self.start_at is None) != (self.end_at is None):
             raise ValueError("开始和结束时间必须同时填写")
         if self.start_at is not None:
@@ -157,4 +211,152 @@ class OptimizationCreate(BaseModel):
                 for value in (bounds.low, bounds.high, bounds.step)
             ):
                 raise ValueError("周期参数的上下限和步长必须为整数")
+        return self
+
+
+class ArchivePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    retention_days: int = Field(default=90, ge=30, le=3650)
+
+
+class ArchiveExecute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class BybitEnvironmentSelect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    environment: Literal["testnet", "mainnet"] = "testnet"
+
+
+class ResearchGuard(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    enabled: bool = False
+    min_trades: int = Field(default=20, ge=5, le=1000)
+    min_validation_windows: int = Field(default=1, ge=1, le=5)
+
+
+class MonitoringPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    enabled: bool = False
+    consecutive_losses: int = Field(default=5, ge=2, le=20)
+    min_fills: int = Field(default=10, ge=5, le=100)
+    max_adverse_slippage_bps: float = Field(default=20, gt=0, le=500)
+
+
+class TestnetSetup(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    budget: float = Field(default=200, ge=10, le=100000)
+    cash_reserve_pct: float = Field(default=0, ge=0, le=90)
+    selection: SelectionPolicy = Field(default_factory=SelectionPolicy)
+    research_guard: ResearchGuard = Field(default_factory=ResearchGuard)
+    monitoring: MonitoringPolicy = Field(default_factory=MonitoringPolicy)
+    risk_per_trade_pct: float = Field(default=0.5, gt=0, le=1)
+    portfolio_risk_pct: float = Field(default=1, gt=0, le=2)
+    daily_loss_pct: float = Field(default=2, gt=0, le=5)
+    max_drawdown_pct: float = Field(default=5, gt=0, le=10)
+    max_positions: int = Field(default=2, ge=1, le=2)
+    leverage: int = Field(default=2, ge=1, le=2)
+    max_correlation: float = Field(default=0.85, ge=0, le=1)
+    fee_rate: float = Field(default=0.00055, ge=0, le=0.01)
+    slippage_bps: float = Field(default=5, ge=0, le=100)
+    interval: Literal["15", "30", "60", "240", "D"] = "60"
+    symbols: list[str] = Field(
+        default_factory=lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+        min_length=1,
+        max_length=10,
+    )
+    rules: StrategyRules = Field(
+        default_factory=lambda: StrategyRules(
+            strategy_type="ema_cross", stop_loss_pct=2
+        )
+    )
+
+    @model_validator(mode="after")
+    def protective_rules(self):
+        import re
+
+        if self.rules.hourly_trend_filter and self.interval != "15":
+            raise ValueError("1小时方向过滤仅适用于15分钟入场")
+        if self.rules.stop_loss_pct <= 0:
+            raise ValueError("测试网自动交易必须设置止损")
+        if self.portfolio_risk_pct < self.risk_per_trade_pct:
+            raise ValueError("组合风险预算不能小于单笔预算")
+        if len(set(self.symbols)) != len(self.symbols) or any(
+            not re.fullmatch(r"[A-Z0-9]{1,20}USDT", symbol) for symbol in self.symbols
+        ):
+            raise ValueError("币种必须为不重复的 USDT 合约")
+        return self
+
+
+class TestnetCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["start", "pause", "flatten", "reset"]
+    environment: Literal["testnet", "mainnet"] | None = None
+    configuration_fingerprint: str | None = Field(
+        default=None, pattern=r"^[a-f0-9]{64}$"
+    )
+
+
+class TestnetResearchApply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    acknowledge_model_difference: bool = False
+    symbols_mode: Literal["replace", "keep"] = "replace"
+    acknowledge_unvalidated_symbols: bool = False
+
+
+class PeriodComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_strategy_id: int | None = Field(default=None, gt=0)
+    symbol: str = Field(pattern=r"^[A-Z0-9]+USDT$", max_length=24)
+    start_at: datetime
+    end_at: datetime
+    evaluation_phase: Literal["research", "validation"] = "research"
+
+
+class FollowupValidation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_at: datetime
+    end_at: datetime
+
+
+class RollingValidation(FollowupValidation):
+    windows: int = Field(default=3, ge=2, le=5)
+
+
+class ExecutionAssumptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    order_type: Literal["Market", "Limit"] = "Market"
+    participation_rate: float = Field(default=0.01, gt=0, le=1)
+    limit_offset_bps: float = Field(default=5, ge=0, le=100)
+    limit_expiry_bars: int = Field(default=2, ge=1, le=10)
+    maker_fee_rate: float = Field(default=0.0002, ge=0, le=0.01)
+    include_funding: bool = True
+
+
+class PortfolioCreate(FollowupValidation):
+    evaluation_phase: Literal["research", "validation"] = "research"
+    execution: ExecutionAssumptions = Field(default_factory=ExecutionAssumptions)
+
+
+class MaintenanceTier(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    notional_limit: float = Field(gt=0)
+    maintenance_rate: float = Field(gt=0, le=1)
+    deduction: float = Field(default=0, ge=0)
+
+
+class ContractSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    constraints: OrderConstraints
+    maintenance_tiers: list[MaintenanceTier] = Field(min_length=1, max_length=100)
+    captured_at: datetime
+    funding_interval_minutes: int = Field(default=480, ge=1, le=1440)
+
+    @model_validator(mode="after")
+    def unique_tiers(self):
+        limits = [row.notional_limit for row in self.maintenance_tiers]
+        if limits != sorted(set(limits)):
+            raise ValueError("风险档位必须按限额递增且不重复")
         return self

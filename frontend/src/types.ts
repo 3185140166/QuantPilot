@@ -45,6 +45,8 @@ export interface Overview {
 }
 export interface StrategyRules {
   version: 1;
+  hourly_trend_filter?: boolean;
+  hourly_min_gap_pct?: number;
   strategy_type:
     | "ema_rsi"
     | "ema_cross"
@@ -90,7 +92,6 @@ export interface Strategy {
   equity: string;
   total_return: string;
   position: Position | null;
-  curve: { timestamp: string; equity: string }[];
 }
 export interface Position {
   strategy_id: number;
@@ -122,6 +123,9 @@ export interface AuditEvent {
   created_at: string;
 }
 export interface BacktestResult {
+  factor_analysis?: FactorReport;
+  robustness?: RobustnessReport;
+  data_quality?: Record<string, unknown>;
   source: string;
   bars: number;
   equity_kind: string;
@@ -195,6 +199,8 @@ export interface SearchDimension {
   enabled: boolean;
 }
 export interface OptimizationCandidate {
+  factor_analysis?: FactorReport;
+  robustness?: RobustnessReport;
   number: number;
   score: number;
   rules: StrategyRules;
@@ -212,6 +218,59 @@ export interface OptimizationCandidate {
     metrics: BacktestResult["metrics"];
     passed: boolean;
     reasons: string[];
+  }[];
+}
+export interface FactorReport {
+  split_at?: string;
+  split_kind?: string;
+  cost_per_trade?: number;
+  affects_execution: boolean;
+  warnings: string[];
+  limitations: string[];
+  rows: {
+    key: string;
+    label: string;
+    horizon: number;
+    train_samples: number;
+    test_samples: number;
+    train_ic: number | null;
+    test_ic: number | null;
+    direction: number | null;
+    lower: number | null;
+    upper: number | null;
+    tail_samples: number;
+    tail_gross_mean: number | null;
+    tail_net_mean: number | null;
+  }[];
+  redundancy: { left: string; right: string; correlation: number }[];
+  ablation?: {
+    label: string;
+    metrics: { total_return: number; max_drawdown: number; trades: number };
+  }[];
+}
+export interface RobustnessReport {
+  warnings: string[];
+  limitations: string[];
+  sensitivity: {
+    rules: StrategyRules;
+    metrics: { total_return: number; max_drawdown: number; trades: number };
+  }[];
+  cost_stress: {
+    multiplier: number;
+    fee_rate: number;
+    slippage_bps: number;
+    metrics: { total_return: number; max_drawdown: number; trades: number };
+  }[];
+  rolling: {
+    train_end: string;
+    test_start: string;
+    test_end: string;
+    train_pass: boolean;
+    test_metrics: {
+      total_return: number;
+      max_drawdown: number;
+      trades: number;
+    };
   }[];
 }
 export interface OptimizationJob {

@@ -1,6 +1,33 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import ResearchDiagnostics from "./components/ResearchDiagnostics.vue";
+import { ElAlert } from "element-plus/es/components/alert/index.mjs";
+import { ElButton } from "element-plus/es/components/button/index.mjs";
+import { ElCheckbox } from "element-plus/es/components/checkbox/index.mjs";
+import { ElDatePicker } from "element-plus/es/components/date-picker/index.mjs";
+import { ElDescriptions } from "element-plus/es/components/descriptions/index.mjs";
+import { ElDescriptionsItem } from "element-plus/es/components/descriptions/index.mjs";
+import { ElDialog } from "element-plus/es/components/dialog/index.mjs";
+import { ElEmpty } from "element-plus/es/components/empty/index.mjs";
+import { ElForm } from "element-plus/es/components/form/index.mjs";
+import { ElFormItem } from "element-plus/es/components/form/index.mjs";
+import { ElIcon } from "element-plus/es/components/icon/index.mjs";
+import { ElInput } from "element-plus/es/components/input/index.mjs";
+import { ElInputNumber } from "element-plus/es/components/input-number/index.mjs";
+import { ElOption } from "element-plus/es/components/select/index.mjs";
+import { ElSelect } from "element-plus/es/components/select/index.mjs";
+import { ElTable } from "element-plus/es/components/table/index.mjs";
+import { ElTableColumn } from "element-plus/es/components/table/index.mjs";
+import { ElTag } from "element-plus/es/components/tag/index.mjs";
+import {
+  defineAsyncComponent,
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+} from "vue";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import {
   DataAnalysis,
   TrendCharts,
@@ -13,10 +40,32 @@ import {
   ArrowRight,
   CircleCheck,
 } from "@element-plus/icons-vue";
-import ChartPanel from "./components/ChartPanel.vue";
-import MarketBoard from "./components/MarketBoard.vue";
+const ChartPanel = defineAsyncComponent(
+  () => import("./components/ChartPanel.vue"),
+);
+const MarketBoard = defineAsyncComponent(
+  () => import("./components/MarketBoard.vue"),
+);
 import RuleFields from "./components/RuleFields.vue";
-import OptimizationPanel from "./components/OptimizationPanel.vue";
+const OptimizationPanel = defineAsyncComponent(
+  () => import("./components/OptimizationPanel.vue"),
+);
+const StrategyCurve = defineAsyncComponent(
+  () => import("./components/StrategyCurve.vue"),
+);
+const ArchivePanel = defineAsyncComponent(
+  () => import("./components/ArchivePanel.vue"),
+);
+const BybitEnvironmentPanel = defineAsyncComponent(
+  () => import("./components/BybitEnvironmentPanel.vue"),
+);
+import HeaderEnvironmentSwitch from "./components/HeaderEnvironmentSwitch.vue";
+const SystemHealthPanel = defineAsyncComponent(
+  () => import("./components/SystemHealthPanel.vue"),
+);
+const TestnetTradingPanel = defineAsyncComponent(
+  () => import("./components/TestnetTradingPanel.vue"),
+);
 import { ApiError, request } from "./api";
 import type {
   Account,
@@ -32,8 +81,33 @@ import type {
 } from "./types";
 
 type Page =
-  "overview" | "market" | "strategies" | "research" | "orders" | "account";
+  | "overview"
+  | "market"
+  | "strategies"
+  | "research"
+  | "orders"
+  | "account"
+  | "trading";
 const page = ref<Page>("overview");
+const researchStrategyId = ref<number>();
+function researchStrategy(strategy: Strategy) {
+  researchStrategyId.value = strategy.id;
+  page.value = "trading";
+}
+const environmentSwitching = ref(false);
+const environmentSwitchTarget = ref("");
+const environmentSwitchMessage = ref("");
+const environmentSwitchElapsed = ref(0);
+function onEnvironmentProgress(event: Event) {
+  const value = (event as CustomEvent).detail;
+  environmentSwitchMessage.value =
+    value.switch_message || "后台正在更新账户与数据环境";
+  environmentSwitchElapsed.value = value.switch_elapsed_seconds || 0;
+}
+const savedEnvironmentPage = sessionStorage.getItem(
+  "quantpilot-environment-page",
+);
+sessionStorage.removeItem("quantpilot-environment-page");
 const navigation = [
   { key: "overview" as Page, title: "总览", icon: DataAnalysis },
   { key: "market" as Page, title: "行情中心", icon: TrendCharts },
@@ -41,8 +115,25 @@ const navigation = [
   { key: "research" as Page, title: "研究与回测", icon: DataAnalysis },
   { key: "orders" as Page, title: "持仓与订单", icon: Document },
   { key: "account" as Page, title: "交易所账户", icon: Wallet },
+  { key: "trading" as Page, title: "交易助手", icon: SetUp },
 ];
 const token = ref(sessionStorage.getItem("quantpilot-token") ?? "");
+if (navigation.some((item) => item.key === savedEnvironmentPage))
+  page.value = savedEnvironmentPage as Page;
+function onEnvironmentSwitching(event: Event) {
+  environmentSwitching.value = true;
+  environmentSwitchMessage.value = "正在提交环境切换请求";
+  environmentSwitchElapsed.value = 0;
+  environmentSwitchTarget.value =
+    (event as CustomEvent).detail === "mainnet" ? "主网" : "测试网";
+}
+function onEnvironmentChanged() {
+  sessionStorage.setItem("quantpilot-environment-page", page.value);
+  window.location.reload();
+}
+function onEnvironmentSwitchFailed() {
+  environmentSwitching.value = false;
+}
 const tokenInput = ref("");
 const authenticated = ref(false);
 const initializing = ref(true);
@@ -121,27 +212,6 @@ const strategyDetailId = ref<number>();
 const strategyDetail = computed(() =>
   strategies.value.find((strategy) => strategy.id === strategyDetailId.value),
 );
-const strategyEquityOption = computed(() => ({
-  tooltip: { trigger: "axis" },
-  grid: { left: 65, right: 25, top: 30, bottom: 50 },
-  xAxis: {
-    type: "category",
-    data:
-      strategyDetail.value?.curve.map((point) => time(point.timestamp)) ?? [],
-  },
-  yAxis: { type: "value", scale: true },
-  series: [
-    {
-      type: "line",
-      showSymbol: (strategyDetail.value?.curve.length ?? 0) <= 1,
-      symbolSize: 8,
-      sampling: "lttb",
-      data:
-        strategyDetail.value?.curve.map((point) => Number(point.equity)) ?? [],
-      lineStyle: { color: "#138b78" },
-    },
-  ],
-}));
 const strategyForm = reactive({
   rules: defaultRules(),
   fee_rate: 0.00055,
@@ -224,6 +294,7 @@ const descriptions: Record<Page, string> = {
   research: "使用历史样本评估策略，所有回测保留记录。",
   orders: "查看模拟持仓、成交费用与订单明细。",
   account: "检查交易所连接与余额，凭据保留在服务端。",
+  trading: "按当前主网／测试网环境执行多币种策略，共享预算可自行设置。",
 };
 
 async function api<T>(path: string, body?: unknown) {
@@ -423,7 +494,11 @@ async function command(strategy: Strategy, action: string) {
   }
   try {
     await api(`/strategies/${strategy.id}/command`, { action });
-    ElMessage.success("指令已提交");
+    ElMessage.success(
+      action === "pause"
+        ? "已暂停新交易，已有持仓继续执行风控保护"
+        : "指令已提交",
+    );
     await refresh();
   } catch (err) {
     ElMessage.error(message(err));
@@ -649,17 +724,64 @@ const equityOption = computed(() => ({
   ],
 }));
 onMounted(async () => {
+  window.addEventListener(
+    "bybit-environment-switching",
+    onEnvironmentSwitching,
+  );
+  window.addEventListener("bybit-environment-changed", onEnvironmentChanged);
+  window.addEventListener("bybit-environment-progress", onEnvironmentProgress);
+  window.addEventListener(
+    "bybit-environment-switch-failed",
+    onEnvironmentSwitchFailed,
+  );
   await initializeWorkspace();
   timer = window.setInterval(() => {
-    if (authenticated.value) void refresh(true);
+    if (authenticated.value && !environmentSwitching.value) void refresh(true);
   }, 5000);
 });
 onBeforeUnmount(() => {
+  window.removeEventListener(
+    "bybit-environment-switching",
+    onEnvironmentSwitching,
+  );
+  window.removeEventListener("bybit-environment-changed", onEnvironmentChanged);
+  window.removeEventListener(
+    "bybit-environment-progress",
+    onEnvironmentProgress,
+  );
+  window.removeEventListener(
+    "bybit-environment-switch-failed",
+    onEnvironmentSwitchFailed,
+  );
   window.clearInterval(timer);
 });
 </script>
 
 <template>
+  <div
+    v-if="environmentSwitching"
+    role="status"
+    class="environment-switch-overlay"
+    style="
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(15, 23, 42, 0.85);
+      color: white;
+      display: grid;
+      place-items: center;
+      text-align: center;
+    "
+  >
+    <div>
+      <h2>正在切换到{{ environmentSwitchTarget }}</h2>
+      <p>
+        {{ environmentSwitchMessage }}（已等待
+        {{ environmentSwitchElapsed }} 秒）
+      </p>
+      <p>完成后自动刷新，自动交易保持暂停。</p>
+    </div>
+  </div>
   <div
     v-if="initializing || (!authenticated && !authRequired)"
     class="startup-screen"
@@ -749,8 +871,8 @@ onBeforeUnmount(() => {
         </button>
       </nav>
       <div class="sidebar-bottom">
-        <span class="status-dot"></span>模拟交易模式
-        <p>交易引擎独立运行<br />关闭页面后策略仍可继续</p>
+        <span class="status-dot"></span>模拟研究 / Bybit 交易
+        <p>执行进程独立运行<br />测试币交易在交易助手中启用</p>
         <button v-if="authRequired" @click="lock">
           <el-icon><SwitchButton /></el-icon>锁定工作台
         </button>
@@ -763,6 +885,7 @@ onBeforeUnmount(() => {
           工作空间 <span>/</span> <strong>{{ heading }}</strong>
         </div>
         <div class="topbar-right">
+          <HeaderEnvironmentSwitch :token="token" />
           <span class="source-badge" :class="{ exchange: !demo }">{{
             demo ? "演示行情" : "交易所行情"
           }}</span
@@ -770,6 +893,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
       <div class="content">
+        <SystemHealthPanel :token="token" />
         <div class="page-title">
           <div>
             <span class="eyebrow">{{
@@ -804,7 +928,7 @@ onBeforeUnmount(() => {
           ><span>{{
             demo
               ? "演示环境：使用合成行情，资金、持仓与订单均为模拟数据。"
-              : "交易所行情环境：使用实际行情与只读账户接口；策略订单仍在本地模拟。"
+              : "交易所行情：原策略管理为本地模拟；交易助手按当前生效的 Bybit 环境执行订单。"
           }}</span
           ><small>SIMULATION</small>
         </div>
@@ -812,7 +936,7 @@ onBeforeUnmount(() => {
         <template v-if="page === 'overview'">
           <div class="metrics-grid">
             <div class="metric-card">
-              <span>模拟总权益 <small>USDT</small></span
+              <span>本地模拟总权益 <small>USDT</small></span
               ><strong>{{ money(overview?.equity) }}</strong>
               <div :class="pnl >= 0 ? 'positive' : 'negative'">
                 {{ signed(pnl) }} <span>累计净盈亏</span>
@@ -891,7 +1015,11 @@ onBeforeUnmount(() => {
                 ></span>
                 <div>
                   <strong>{{
-                    worker.name === "engine" ? "模拟交易引擎" : "回测计算进程"
+                    worker.name === "testnet"
+                      ? "Bybit 执行与对账"
+                      : worker.name === "engine"
+                        ? "模拟交易引擎"
+                        : "回测计算进程"
                   }}</strong
                   ><small>{{
                     worker.online ? "服务持续运行中" : "等待服务启动"
@@ -969,6 +1097,12 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </template>
+
+        <ArchivePanel
+          v-if="page === 'overview'"
+          :token="token"
+          @archived="refresh()"
+        />
 
         <template v-if="page === 'market'">
           <section class="panel market-selector-panel">
@@ -1114,21 +1248,26 @@ onBeforeUnmount(() => {
                   ><el-button link @click="strategyDetailId = row.id"
                     >详情</el-button
                   ><el-button
+                    link
+                    :disabled="row.exchange !== 'bybit'"
+                    @click="researchStrategy(row as Strategy)"
+                    >研究并用于交易助手</el-button
+                  ><el-button
                     v-if="row.status === 'paused'"
                     link
                     type="primary"
-                    @click="command(row, 'start')"
+                    @click="command(row as Strategy, 'start')"
                     >启动</el-button
                   ><el-button
                     v-if="row.status === 'running'"
                     link
-                    @click="command(row, 'pause')"
+                    @click="command(row as Strategy, 'pause')"
                     >暂停</el-button
                   ><el-button
                     link
                     type="danger"
                     :disabled="row.status === 'flattening'"
-                    @click="command(row, 'flatten')"
+                    @click="command(row as Strategy, 'flatten')"
                     >平仓并暂停</el-button
                   ></template
                 ></el-table-column
@@ -1136,6 +1275,8 @@ onBeforeUnmount(() => {
             >
             <p class="panel-note">
               暂停会停止信号处理并保留模拟持仓。需要退出持仓时，使用“平仓并暂停”。
+              “研究并用于交易助手”仅支持 Bybit
+              策略，先研究并独立验证，不会直接应用或启动交易。
             </p>
           </section>
           <section v-if="strategyDetail" class="panel">
@@ -1215,19 +1356,12 @@ onBeforeUnmount(() => {
               :closable="false"
               class="mb"
             />
-            <ChartPanel
-              v-if="strategyDetail.curve.length"
-              :option="strategyEquityOption"
-              :height="300"
-            />
-            <el-empty
-              v-else
-              description="启动后记录含浮动盈亏的模拟权益曲线"
-              :image-size="60"
-            />
+            <StrategyCurve :strategy-id="strategyDetail.id" :token="token" />
             <p class="panel-note">
               展示最近 1000 个 K
-              线周期的权益记录，最大回撤保留全程峰值统计；暂停保留持仓，权益仍随价格变化。
+              线周期的权益记录；最大回撤按引擎每次轮询计算并保留全程统计，同一根
+              K
+              线内的回撤可能不显示在曲线上。暂停后停止新开仓和信号反手，已有持仓仍执行止损、止盈及最大回撤保护。
             </p>
           </section>
           <section v-if="strategies.some((s) => s.last_error)" class="panel">
@@ -1506,7 +1640,10 @@ onBeforeUnmount(() => {
               <el-table-column label="操作" min-width="190"
                 ><template #default="{ row }"
                   ><el-button link @click="openJob(row.id)">查看</el-button
-                  ><el-button link type="primary" @click="promoteJob(row)"
+                  ><el-button
+                    link
+                    type="primary"
+                    @click="promoteJob(row as Job)"
                     >创建模拟策略</el-button
                   ></template
                 ></el-table-column
@@ -1670,6 +1807,11 @@ onBeforeUnmount(() => {
             </section>
             <section class="panel">
               <div class="panel-heading"><h3>回测成交</h3></div>
+              <ResearchDiagnostics
+                :robustness="result.robustness"
+                :quality="result.data_quality"
+                :factors="result.factor_analysis"
+              />
               <el-table :data="result.trades" max-height="420"
                 ><el-table-column
                   label="方向"
@@ -1792,13 +1934,17 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-if="page === 'account'">
+          <BybitEnvironmentPanel
+            :token="token"
+            @pending="account = undefined"
+          />
           <section class="panel account-panel">
             <div class="panel-heading">
               <div>
                 <h3>交易所连接</h3>
                 <span>余额仅在点击查询后读取</span>
               </div>
-              <el-tag type="info">只读接口</el-tag>
+              <el-tag type="info">账户查询</el-tag>
             </div>
             <div class="connection-card">
               <span class="exchange-logo">{{
@@ -1828,7 +1974,7 @@ onBeforeUnmount(() => {
               :closable="false"
             /><template v-if="account?.connected"
               ><el-alert
-                :title="`连接成功 · ${account.testnet ? '测试网' : '主网'} · 账户只读`"
+                :title="`余额查询成功 · ${account.testnet ? '测试网' : '主网'}`"
                 type="success"
                 :closable="false"
                 class="mb" /><el-table :data="account.balances"
@@ -1847,11 +1993,16 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </template>
+        <TestnetTradingPanel
+          v-if="page === 'trading'"
+          :token="token"
+          :source-strategy-id="researchStrategyId"
+        />
         <footer>
           QuantPilot
           <span
-            >私人量化工作台 · {{ demo ? "演示行情" : "交易所行情" }} /
-            模拟执行</span
+            >私人量化工作台 · {{ demo ? "演示行情" : "交易所行情" }} / 本地模拟
+            / 交易助手</span
           ><span>状态每 5 秒更新 · 行情手动刷新</span>
         </footer>
       </div>

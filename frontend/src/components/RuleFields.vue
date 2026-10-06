@@ -1,5 +1,12 @@
 <script setup lang="ts">
+import { ElFormItem } from "element-plus/es/components/form/index.mjs";
+import { ElInput } from "element-plus/es/components/input/index.mjs";
+import { ElInputNumber } from "element-plus/es/components/input-number/index.mjs";
+import { ElOption } from "element-plus/es/components/select/index.mjs";
+import { ElSelect } from "element-plus/es/components/select/index.mjs";
+import { ElSwitch } from "element-plus/es/components/switch/index.mjs";
 import type { StrategyRules } from "../types";
+defineProps<{ accountRiskMode?: boolean; simpleMode?: boolean }>();
 const rules = defineModel<StrategyRules>({ required: true });
 </script>
 
@@ -30,7 +37,7 @@ const rules = defineModel<StrategyRules>({ required: true });
       ><el-input-number
         v-model="rules.slow"
         :min="3"
-        :max="500"
+        :max="rules.hourly_trend_filter ? 200 : 500"
         :disabled="!['ema_rsi', 'ema_cross'].includes(rules.strategy_type)"
     /></el-form-item>
     <el-form-item label="RSI 周期"
@@ -71,36 +78,13 @@ const rules = defineModel<StrategyRules>({ required: true });
         :max="5"
         :step="0.25"
     /></el-form-item>
-    <el-form-item label="成交量倍数下限（0 为关闭）"
-      ><el-input-number
-        v-model="rules.volume_ratio"
-        :min="0"
-        :max="10"
-        :step="0.25"
-    /></el-form-item>
-    <el-form-item label="成交量均值周期"
-      ><el-input-number v-model="rules.volume_period" :min="5" :max="100"
-    /></el-form-item>
-    <el-form-item label="ATR / 价格上限（%，0 为关闭）"
-      ><el-input-number
-        v-model="rules.atr_pct_max"
-        :min="0"
-        :max="100"
-        :step="0.25"
-    /></el-form-item>
-    <el-form-item label="ATR 周期"
-      ><el-input-number v-model="rules.atr_period" :min="2" :max="100"
-    /></el-form-item>
-    <el-form-item label="ADX 趋势强度下限（0 为关闭）"
-      ><el-input-number v-model="rules.adx_min" :min="0" :max="100"
-    /></el-form-item>
-    <el-form-item label="ADX 周期"
-      ><el-input-number v-model="rules.adx_period" :min="2" :max="100"
-    /></el-form-item>
-    <el-form-item label="止损（%，0 为关闭）"
+    <el-form-item
+      :label="
+        accountRiskMode ? '止损距离（%，必须启用）' : '止损（%，0 为关闭）'
+      "
       ><el-input-number
         v-model="rules.stop_loss_pct"
-        :min="0"
+        :min="accountRiskMode ? 0.1 : 0"
         :max="100"
         :precision="2"
     /></el-form-item>
@@ -111,7 +95,7 @@ const rules = defineModel<StrategyRules>({ required: true });
         :max="1000"
         :precision="2"
     /></el-form-item>
-    <el-form-item label="最大回撤暂停（%，0 为关闭）"
+    <el-form-item v-if="!accountRiskMode" label="最大回撤暂停（%，0 为关闭）"
       ><el-input-number
         v-model="rules.max_drawdown_pct"
         :min="0"
@@ -119,7 +103,68 @@ const rules = defineModel<StrategyRules>({ required: true });
         :precision="2"
     /></el-form-item>
   </div>
-  <p class="panel-note">
+  <details :open="!simpleMode" class="advanced-rule-fields">
+    <summary v-show="simpleMode">更多过滤条件：成交量、波动与趋势强度</summary>
+    <div class="form-grid">
+      <el-form-item label="1小时方向过滤（15分钟入场）"
+        ><el-switch v-model="rules.hourly_trend_filter"
+      /></el-form-item>
+      <el-form-item
+        v-if="rules.hourly_trend_filter"
+        label="1小时均线间距下限（%）"
+        ><el-input-number
+          v-model="rules.hourly_min_gap_pct"
+          :min="0"
+          :max="5"
+          :step="0.05"
+      /></el-form-item>
+      <el-form-item label="成交量倍数下限（0 为关闭）"
+        ><el-input-number
+          v-model="rules.volume_ratio"
+          :min="0"
+          :max="10"
+          :step="0.25"
+      /></el-form-item>
+      <el-form-item label="成交量均值周期"
+        ><el-input-number v-model="rules.volume_period" :min="5" :max="100"
+      /></el-form-item>
+      <el-form-item label="ATR / 价格上限（%，0 为关闭）"
+        ><el-input-number
+          v-model="rules.atr_pct_max"
+          :min="0"
+          :max="100"
+          :step="0.25"
+      /></el-form-item>
+      <el-form-item label="ATR 周期"
+        ><el-input-number v-model="rules.atr_period" :min="2" :max="100"
+      /></el-form-item>
+      <el-form-item label="ADX 趋势强度下限（0 为关闭）"
+        ><el-input-number v-model="rules.adx_min" :min="0" :max="100"
+      /></el-form-item>
+      <el-form-item label="ADX 周期"
+        ><el-input-number v-model="rules.adx_period" :min="2" :max="100"
+      /></el-form-item>
+    </div>
+  </details>
+  <p v-if="rules.hourly_trend_filter" class="panel-note">
+    请将信号周期设为15分钟。完整已收盘1小时K线使用上方周期的有限窗口指数均线判断方向；上涨只允许做多事件，下跌只允许做空事件，间距不足、预热不足或小时数据缺失时等待。固定使用最近“慢EMA＋1”个小时，研究和运行采用相同窗口。慢EMA最多200；交易所止损持续保护，不等待15分钟收盘。
+  </p>
+  <p v-if="accountRiskMode" class="panel-note">
+    模板自动判断多空；账户回撤与每日亏损限制使用下方共享预算设置。暂停状态且空仓时可修改，保存后才生效。
+  </p>
+  <details class="factor-guide">
+    <summary>因子是什么？这些参数怎样影响策略？</summary>
+    <p class="panel-note">
+      因子是从行情计算出来的特征，不是保证涨跌的原因。EMA和价格动量观察趋势；RSI观察价格强弱；成交量倍数观察量能；ATR观察波动；ADX观察趋势强度。
+    </p>
+    <p class="panel-note">
+      模板决定入场事件和多空方向。成交量、ATR、ADX是过滤条件：有入场事件但过滤未通过，就等待；ADX强或成交量大本身不代表应该做多。阈值为0表示关闭对应过滤。
+    </p>
+    <p class="panel-note">
+      不要把所有条件都调到“看起来最赚钱”。先固定研究区间，用回测里的因子诊断和逐项关闭过滤对照检查，再用后续独立区间验证。过滤太多可能只剩极少数交易，结果不稳定。
+    </p>
+  </details>
+  <p v-if="!accountRiskMode" class="panel-note">
     快 EMA 小于慢 EMA，RSI
     下限小于上限。回测按收盘价检查风控、下一根开盘成交；模拟引擎按轮询价格检查，实际触发时间与成交价可能不同。未模拟杠杆强平或资金费率。
   </p>

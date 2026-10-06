@@ -8,6 +8,7 @@ from time import monotonic
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 from quantpilot.config import Settings
 from quantpilot.exchange.binance import BinanceFuturesClient
@@ -64,9 +65,45 @@ def demo_price(symbol, observations):
     )
 
 
+def demo_bars(symbol, times, minutes, now=None):
+    """A closed synthetic candle depends only on symbol, interval and timestamp."""
+    ticks = times.as_unit("ns").astype("int64").to_numpy() / (minutes * 60 * 1e9)
+    close, opening = demo_price(symbol, ticks), demo_price(symbol, ticks - 1)
+    frame = pd.DataFrame(
+        {
+            "timestamp": times,
+            "open": opening,
+            "high": np.maximum(opening, close) * 1.002,
+            "low": np.minimum(opening, close) * 0.998,
+            "close": close,
+            "volume": 100 + 30 * np.cos(ticks / 7),
+        }
+    )
+    frame["turnover"] = frame.volume * frame.close
+    if now is not None and not frame.empty:
+        # Only the unfinished candle evolves. Closed bars remain reproducible.
+        index = frame.index[-1]
+        progress = float(
+            (now - frame.at[index, "timestamp"]) / pd.Timedelta(minutes=minutes)
+        )
+        if 0 <= progress < 1:
+            opening = frame.at[index, "open"]
+            live = opening + (frame.at[index, "close"] - opening) * progress
+            frame.at[index, "close"] = live
+            frame.at[index, "high"] = max(opening, live) * (1 + 0.002 * progress)
+            frame.at[index, "low"] = min(opening, live) * (1 - 0.002 * progress)
+            frame.at[index, "volume"] *= progress
+            frame.at[index, "turnover"] = frame.at[index, "volume"] * live
+    return frame
+
+
 class MarketService:
     def __init__(self, source: str):
         self.source = source
+        if source == "exchange":
+            # Freeze this process's exchange profile before any lazy request.
+            # A saved web selection must only take effect after restart.
+            load_dotenv(".env", override=False)
         self._cache = {}
         self._catalog_lock = Lock()
         self._ticker_lock = Lock()
@@ -235,21 +272,7 @@ class MarketService:
             times = pd.date_range(
                 end=now.floor(f"{minutes}min"), periods=limit, freq=f"{minutes}min"
             )
-            ticks = times.as_unit("ns").astype("int64").to_numpy() / (
-                minutes * 60 * 1e9
-            )
-            close, opening = demo_price(symbol, ticks), demo_price(symbol, ticks - 1)
-            frame = pd.DataFrame(
-                {
-                    "timestamp": times,
-                    "open": opening,
-                    "high": np.maximum(opening, close) * 1.002,
-                    "low": np.minimum(opening, close) * 0.998,
-                    "close": close,
-                    "volume": 100 + 30 * np.cos(ticks / 7),
-                }
-            )
-            frame["turnover"] = frame.volume * frame.close
+            frame = demo_bars(symbol, times, minutes, now=now)
         else:
             client = self.client(exchange, symbol, interval)
             rows = client.get_klines(limit=limit)
@@ -290,21 +313,7 @@ class MarketService:
             return self._history_cache[cache_key].copy()
         if self.source == "demo":
             times = pd.date_range(first, last, freq=step)
-            ticks = times.as_unit("ns").astype("int64").to_numpy() / (
-                minutes * 60 * 1e9
-            )
-            close, opening = demo_price(symbol, ticks), demo_price(symbol, ticks - 1)
-            frame = pd.DataFrame(
-                {
-                    "timestamp": times,
-                    "open": opening,
-                    "high": np.maximum(opening, close) * 1.002,
-                    "low": np.minimum(opening, close) * 0.998,
-                    "close": close,
-                    "volume": np.ones(len(times)) * 100,
-                }
-            )
-            frame["turnover"] = frame.volume * frame.close
+            frame = demo_bars(symbol, times, minutes)
         else:
             client = self.client(exchange, symbol, interval)
             pages, cursor = [], first
@@ -388,6 +397,11 @@ def validate_market(frame):
         frame.low > frame[["open", "close", "high"]].min(axis=1)
     ).any():
         raise ValueError("Invalid OHLC bounds")
+    for column in ("volume", "turnover"):
+        if column in frame:
+            values = frame[column].to_numpy(dtype=float)
+            if not np.isfinite(values).all() or (values < 0).any():
+                raise ValueError("Invalid market volume or turnover")
 
 
 def serialize_bars(frame):

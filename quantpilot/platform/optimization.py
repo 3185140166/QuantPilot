@@ -15,9 +15,12 @@ from quantpilot.backtest import run_backtest
 from quantpilot.metrics import report
 from quantpilot.strategy import signal_warmup
 
+from .data_quality import candle_audit, environment_tag
 from .engine import guard_lease
+from .factor_research import ablation, analyze
 from .market import INTERVAL_MINUTES, HistoryError
 from .models import BacktestJob, OptimizationJob, utcnow
+from .robustness import diagnose
 from .rules import StrategyRules
 from .schemas import OptimizationCreate
 from .search_space import SPACE
@@ -71,6 +74,9 @@ def evaluate(frame, config, rules, start, end):
         rules=rules,
         max_notional=config.base.max_notional,
         trade_start=start,
+        risk_sizing=config.base.risk_sizing.model_dump()
+        if config.base.risk_sizing
+        else None,
     )
     return result, selected
 
@@ -92,6 +98,7 @@ def result_payload(result, bars, params, dataset):
         "rules": params["rules"],
         "risk_halted": result.risk_halted,
         "rejected_entries": result.rejected_entries,
+        "risk_summary": result.risk_summary,
         "dataset": {
             **dataset,
             "start_at": str(bars.timestamp.iloc[0]),
@@ -116,19 +123,58 @@ def run_optimization(factory, market, owner, job_id):
         params = copy.deepcopy(job.parameters)
         state = copy.deepcopy(job.result or {"trials": []})
     config = OptimizationCreate.model_validate(
-        {key: value for key, value in params.items() if key != "source"}
+        {
+            key: value
+            for key, value in params.items()
+            if key not in {"source", "market_environment"}
+        }
     )
     if params["source"] != market.source:
         raise HistoryError("优化任务的行情来源与当前回测进程不一致")
+    market_environment = environment_tag(
+        market,
+        config.base.exchange,
+        config.base.symbol,
+        config.base.interval,
+        params.get("market_environment"),
+    )
+    if (
+        not state.get("dataset")
+        and params.get("market_environment") != market_environment
+    ):
+        params["market_environment"] = market_environment
+        with factory.begin() as db:
+            guard_lease(db, "research", owner)
+            db.get(OptimizationJob, job_id).parameters = copy.deepcopy(params)
     maximum = config.base.rules.model_dump()
     maximum.update({key: bounds.high for key, bounds in config.ranges.items()})
     # Include filters even when their base value is disabled but the range enables them.
-    config._history_warmup = int(signal_warmup(maximum))
+    enlarged = {
+        **maximum,
+        **{
+            key: min(500, round(maximum[key] * 1.1))
+            for key in (
+                "fast",
+                "slow",
+                "rsi_period",
+                "breakout_period",
+                "bollinger_period",
+            )
+        },
+    }
+    config._history_warmup = max(
+        int(signal_warmup(maximum)), int(signal_warmup(enlarged))
+    )
     check_active(factory, owner, job_id)
     if state.get("dataset"):
         if state.get("optuna_version", optuna.__version__) != optuna.__version__:
             raise HistoryError("优化库版本已改变，请保留旧结果并新建优化任务")
         dataset = state["dataset"]
+        if (
+            market.source == "exchange"
+            and dataset.get("market_environment") != market_environment
+        ):
+            raise HistoryError("优化样本环境不一致或未记录，请保留旧结果并新建任务")
         path = Path(dataset["path"])
         if (
             not path.is_file()
@@ -136,6 +182,7 @@ def run_optimization(factory, market, owner, job_id):
         ):
             raise HistoryError("已保存的优化行情样本缺失或指纹不一致，不能继续该任务")
         frame = pd.read_parquet(path)
+        config._history_warmup = dataset["warmup_bars"]
     else:
         frame = market.history(
             config.base.exchange,
@@ -150,6 +197,7 @@ def run_optimization(factory, market, owner, job_id):
         path = target / f"optimization-{job_id}-{uuid.uuid4().hex}.parquet"
         frame.to_parquet(path, index=False)
         dataset = {
+            "market_environment": market_environment,
             "path": str(path),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "warmup_bars": config._history_warmup,
@@ -164,6 +212,8 @@ def run_optimization(factory, market, owner, job_id):
             config_version=config.base.rules.version,
         )
         checkpoint(factory, owner, job_id, state)
+    state["data_quality"] = candle_audit(frame, config.base.interval)
+    state["data_quality"]["market_environment"] = market_environment
     distributions = {}
     for key, bounds in config.ranges.items():
         distributions[key] = (
@@ -294,7 +344,36 @@ def run_optimization(factory, market, owner, job_id):
             windows=windows,
             eligible=eligible,
         )
+        candidate["robustness"] = diagnose(
+            frame,
+            config,
+            candidate["rules"],
+            evaluate,
+            lambda: check_active(factory, owner, job_id),
+        )
+        candidate["factor_analysis"] = analyze(
+            frame,
+            candidate["rules"],
+            start_at=config.base.start_at,
+            end_at=config.base.end_at,
+            split_at=config.split_at,
+            fee_rate=config.base.fee_rate,
+            slippage_bps=config.base.slippage_bps,
+        )
+
+        def compare_filters(candidate_rules):
+            check_active(factory, owner, job_id)
+            return report(
+                evaluate(
+                    frame, config, candidate_rules, config.split_at, config.base.end_at
+                )[0]
+            )
+
+        candidate["factor_analysis"]["ablation"] = ablation(
+            candidate["rules"], compare_filters
+        )
         backtest_params = {
+            "market_environment": market_environment,
             **config.base.model_dump(mode="json"),
             "rules": candidate["rules"],
             "start_at": config.split_at.isoformat(),
@@ -308,7 +387,12 @@ def run_optimization(factory, market, owner, job_id):
             (
                 candidate,
                 backtest_params,
-                result_payload(validation, bars, backtest_params, dataset),
+                {
+                    **result_payload(validation, bars, backtest_params, dataset),
+                    "robustness": candidate["robustness"],
+                    "factor_analysis": candidate["factor_analysis"],
+                    "data_quality": state["data_quality"],
+                },
             )
         )
     with factory.begin() as db:

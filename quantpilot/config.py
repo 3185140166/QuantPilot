@@ -46,27 +46,32 @@ class Settings:
         if exchange not in {"bybit", "binance"}:
             raise ValueError("EXCHANGE must be bybit or binance")
         testnet = _bool("BYBIT_TESTNET", os.getenv("BYBIT_TESTNET"), True)
-        binance_testnet = _bool(
-            "BINANCE_TESTNET", os.getenv("BINANCE_TESTNET"), True
+        # Explicit testnet fields prevent a mainnet credential pair being reused.
+        separate_testnet_keys = testnet and any(
+            name in os.environ
+            for name in ("BYBIT_TESTNET_API_KEY", "BYBIT_TESTNET_API_SECRET")
         )
+        api_key = os.getenv(
+            "BYBIT_TESTNET_API_KEY" if separate_testnet_keys else "BYBIT_API_KEY"
+        )
+        api_secret = os.getenv(
+            "BYBIT_TESTNET_API_SECRET" if separate_testnet_keys else "BYBIT_API_SECRET"
+        )
+        binance_testnet = _bool("BINANCE_TESTNET", os.getenv("BINANCE_TESTNET"), True)
         dry_run = _bool("DRY_RUN", os.getenv("DRY_RUN"), True)
-        trading_enabled = _bool(
-            "TRADING_ENABLED", os.getenv("TRADING_ENABLED"), False
-        )
+        trading_enabled = _bool("TRADING_ENABLED", os.getenv("TRADING_ENABLED"), False)
         confirmation = os.getenv("LIVE_TRADING_CONFIRM", "")
         if (
-            (not (testnet if exchange == "bybit" else binance_testnet))
-            and confirmation != "I_UNDERSTAND_LIVE_TRADING"
-        ):
+            not (testnet if exchange == "bybit" else binance_testnet)
+        ) and confirmation != "I_UNDERSTAND_LIVE_TRADING":
             raise ValueError(
-                "Mainnet requires LIVE_TRADING_CONFIRM="
-                "I_UNDERSTAND_LIVE_TRADING"
+                "Mainnet requires LIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING"
             )
         if not dry_run and not trading_enabled:
             raise ValueError("DRY_RUN=false requires TRADING_ENABLED=true")
         return cls(
-            api_key=os.getenv("BYBIT_API_KEY") or None,
-            api_secret=os.getenv("BYBIT_API_SECRET") or None,
+            api_key=api_key or None,
+            api_secret=api_secret or None,
             exchange=exchange,
             testnet=testnet,
             binance_api_key=os.getenv("BINANCE_API_KEY") or None,
@@ -85,7 +90,9 @@ class Settings:
     def require_private_api(self) -> None:
         if not self.api_key or not self.api_secret:
             raise ValueError(
-                "BYBIT_API_KEY and BYBIT_API_SECRET are required for private API calls"
+                "Bybit API credentials are required for private API calls; "
+                "fill BYBIT_TESTNET_API_KEY / BYBIT_TESTNET_API_SECRET when "
+                "using separate testnet credentials"
             )
 
     def require_order_submission(self, exchange: str, qty: str) -> None:

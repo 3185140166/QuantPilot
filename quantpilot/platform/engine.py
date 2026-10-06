@@ -147,8 +147,6 @@ def process_strategy(factory, strategy_id, market, owner=None):
             return drawdown
 
         drawdown = save_equity()
-        if strategy.status == "paused":
-            return
         if strategy.status == "flattening":
             if position:
                 # Flatten is a separate command identity, even within the same signal bar.
@@ -200,6 +198,9 @@ def process_strategy(factory, strategy_id, market, owner=None):
                 )
             )
             save_equity()
+            return
+        if strategy.status == "paused":
+            # Pause stops entries/reversals, but existing exposure stays protected.
             return
         if strategy.last_bar == bar_time:
             return
@@ -294,7 +295,7 @@ async def run():
     engine, factory = make_database(settings.database_url)
     owner = uuid.uuid4().hex
     market = MarketService(settings.market_source)
-    logger.info("Paper engine started; source=%s", settings.market_source)
+    logger.info("Trading engine started; source=%s", settings.market_source)
     try:
         while True:
             try:

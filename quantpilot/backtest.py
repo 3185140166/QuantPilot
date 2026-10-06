@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 
+from .account_risk import evaluate_account_risk
+from .sizing import allocation
 from .strategy import SIGNAL_KEYS, generate_signals, signal_warmup
 
 
@@ -30,6 +33,7 @@ class BacktestResult:
     realized_curve: pd.Series | None = None
     risk_halted: bool = False
     rejected_entries: int = 0
+    risk_summary: dict | None = None
 
     @property
     def total_return(self) -> float:
@@ -47,6 +51,7 @@ def run_backtest(
     rules: dict | None = None,
     max_notional: float | None = None,
     trade_start: object | None = None,
+    risk_sizing: dict | None = None,
 ) -> BacktestResult:
     required = {"timestamp", "open", "close"}
     if not required.issubset(bars.columns):
@@ -67,6 +72,17 @@ def run_backtest(
     prices = bars[["open", "close"]].to_numpy(dtype=float)
     if not np.isfinite(prices).all() or (prices <= 0).any():
         raise ValueError("prices must be finite and positive")
+    if risk_sizing is not None:
+        if not {"high", "low"}.issubset(bars.columns):
+            raise ValueError("Risk-sized backtests require OHLC bars")
+        extremes = bars[["high", "low"]].to_numpy(dtype=float)
+        if (
+            not np.isfinite(extremes).all()
+            or (extremes <= 0).any()
+            or (bars.high < bars[["open", "close", "low"]].max(axis=1)).any()
+            or (bars.low > bars[["open", "close", "high"]].min(axis=1)).any()
+        ):
+            raise ValueError("Invalid OHLC ranges")
     config = rules or {}
     warmup = signal_warmup(config)
     if max_notional is not None and (not isfinite(max_notional) or max_notional <= 0):
@@ -76,6 +92,17 @@ def run_backtest(
             raise ValueError("risk percentages must be finite and nonnegative")
     if len(bars) < warmup + 2:
         return BacktestResult(initial_equity, pd.Series(dtype=float), [])
+    sizing = None
+    if risk_sizing is not None:
+        from .platform.schemas import RiskSizing
+
+        sizing = RiskSizing.model_validate(risk_sizing)
+        if not config.get("stop_loss_pct") or initial_equity > sizing.budget:
+            raise ValueError(
+                "Risk sizing needs a stop and initial equity within budget"
+            )
+    active_quantity = quantity
+    protective_stop = protective_take = None
     equity = float(initial_equity)
     position: tuple[str, float, object] | None = None
     trades: list[Trade] = []
@@ -90,6 +117,37 @@ def run_backtest(
     curve: list[tuple[object, float]] = [(bars.iloc[start_index]["timestamp"], equity)]
     realized = list(curve)
     peak, halted, rejected = equity, False, 0
+    day, day_equity = None, equity
+    latest_risk = None
+    max_budget_drawdown = max_budget_daily_loss = 0.0
+
+    def check_risk(marked, timestamp):
+        nonlocal peak, day, day_equity, halted, latest_risk
+        nonlocal max_budget_drawdown, max_budget_daily_loss
+        peak = max(peak, marked)
+        stamp = pd.Timestamp(timestamp)
+        stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+        current_day = stamp.tz_convert("Asia/Shanghai").date()
+        if day != current_day:
+            day, day_equity = current_day, marked
+        latest_risk = evaluate_account_risk(
+            budget=sizing.budget,
+            equity=marked,
+            peak_equity=peak,
+            day_equity=day_equity,
+            daily_loss_pct=sizing.daily_loss_pct,
+            max_drawdown_pct=sizing.max_drawdown_pct,
+        )
+        max_budget_drawdown = max(
+            max_budget_drawdown,
+            float(latest_risk.drawdown_amount / latest_risk.budget * 100),
+        )
+        max_budget_daily_loss = max(
+            max_budget_daily_loss,
+            float(latest_risk.daily_loss_amount / latest_risk.budget * 100),
+        )
+        halted |= latest_risk.halted
+        return halted
 
     def execution_price(price: float, side: str) -> float:
         impact = slippage_bps / 10_000
@@ -104,12 +162,12 @@ def run_backtest(
             float(price), "SELL" if old_side == "LONG" else "BUY"
         )
         gross = (
-            (exit_price - entry) * quantity
+            (exit_price - entry) * active_quantity
             if old_side == "LONG"
-            else (entry - exit_price) * quantity
+            else (entry - exit_price) * active_quantity
         )
-        fees = (entry + exit_price) * quantity * fee_rate
-        equity += gross - exit_price * quantity * fee_rate
+        fees = (entry + exit_price) * active_quantity * fee_rate
+        equity += gross - exit_price * active_quantity * fee_rate
         trades.append(
             Trade(
                 old_side,
@@ -117,7 +175,7 @@ def run_backtest(
                 timestamp,
                 entry,
                 exit_price,
-                quantity,
+                active_quantity,
                 gross - fees,
             )
         )
@@ -136,19 +194,33 @@ def run_backtest(
         next_time = timestamps[index + 1]
         mark = float(prices[index, 1])
         marked_equity = equity + (
-            (mark - position[1]) * quantity * (1 if position[0] == "LONG" else -1)
+            (mark - position[1])
+            * active_quantity
+            * (1 if position[0] == "LONG" else -1)
             if position
             else 0
         )
         peak = max(peak, marked_equity)
         risk_close = False
+        if sizing:
+            risk_close = check_risk(marked_equity, timestamps[index])
+        if sizing and position:
+            gap_stop = (
+                next_open <= protective_stop
+                if position[0] == "LONG"
+                else next_open >= protective_stop
+            )
+            if gap_stop:
+                close_position(float(next_open), next_time)
+                risk_close = True
         if (
-            config.get("max_drawdown_pct")
+            sizing is None
+            and config.get("max_drawdown_pct")
             and (peak - marked_equity) / peak * 100 >= config["max_drawdown_pct"]
         ):
             halted = True
             risk_close = True
-        if position:
+        if position and sizing is None:
             change = (
                 (mark / position[1] - 1) * (1 if position[0] == "LONG" else -1) * 100
             )
@@ -176,22 +248,67 @@ def run_backtest(
             entry = execution_price(
                 float(next_open), "BUY" if side == "LONG" else "SELL"
             )
-            notional = entry * quantity
-            if max_notional is not None and (
-                notional > max_notional or notional * (1 + fee_rate) > equity
+            if sizing:
+                sizing_config = SimpleNamespace(
+                    **sizing.model_dump(exclude={"constraints"}),
+                    rules=SimpleNamespace(**{"take_profit_pct": 0, **config}),
+                    fee_rate=fee_rate,
+                    slippage_bps=slippage_bps,
+                )
+                planned = allocation(
+                    sizing_config,
+                    equity,
+                    float(next_open),
+                    side,
+                    sizing.constraints.instrument(),
+                    available=equity,
+                )
+                active_quantity = float(planned["quantity"])
+                protective_stop = float(planned["stop_loss"])
+                protective_take = (
+                    float(planned["take_profit"]) if planned["take_profit"] else None
+                )
+            notional = entry * active_quantity
+            if active_quantity <= 0 or (
+                sizing is None
+                and max_notional is not None
+                and (notional > max_notional or notional * (1 + fee_rate) > equity)
             ):
                 rejected += 1
             else:
                 position = (side, entry, next_time)
                 equity -= notional * fee_rate
+        if sizing and position:
+            # Conservative OHLC model: gap first, stop first when both barriers touch.
+            row = bars.iloc[index + 1]
+            if not {"high", "low"}.issubset(bars.columns):
+                raise ValueError("Risk-sized backtests require OHLC bars")
+            long = position[0] == "LONG"
+            stop_hit = (
+                row.low <= protective_stop if long else row.high >= protective_stop
+            )
+            take_hit = protective_take and (
+                row.high >= protective_take if long else row.low <= protective_take
+            )
+            if stop_hit:
+                close_position(
+                    min(float(next_open), protective_stop)
+                    if long
+                    else max(float(next_open), protective_stop),
+                    next_time,
+                )
+            elif take_hit:
+                close_position(protective_take, next_time)
         marked = equity + (
             (float(next_close) - position[1])
-            * quantity
+            * active_quantity
             * (1 if position[0] == "LONG" else -1)
             if position
             else 0
         )
         peak = max(peak, marked)
+        if sizing:
+            check_risk(marked, next_time)
         curve.append((next_time, marked))
         realized.append((next_time, equity))
     if position is not None:
@@ -200,6 +317,8 @@ def run_backtest(
     if curve:
         curve[-1] = (curve[-1][0], equity)
         realized[-1] = (realized[-1][0], equity)
+        if sizing:
+            check_risk(equity, curve[-1][0])
     equity_curve = pd.Series(
         {timestamp: value for timestamp, value in curve}, dtype=float
     )
@@ -210,4 +329,12 @@ def run_backtest(
         pd.Series(dict(realized), dtype=float),
         halted,
         rejected,
+        {
+            **latest_risk.as_dict(),
+            "max_drawdown_pct": max_budget_drawdown,
+            "max_daily_loss_pct": max_budget_daily_loss,
+            "halted": halted,
+        }
+        if latest_risk
+        else None,
     )

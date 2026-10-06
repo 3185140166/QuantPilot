@@ -3,7 +3,15 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -153,3 +161,101 @@ class OptimizationJob(Base):
         DateTime(timezone=True), default=utcnow
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TestnetAccount(Base):
+    __tablename__ = "testnet_accounts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    configuration: Mapped[dict] = mapped_column(JSON)
+    enabled: Mapped[bool] = mapped_column(default=False)
+    flatten_requested: Mapped[bool] = mapped_column(default=False)
+    baseline_equity: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
+    equity: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=200)
+    peak_equity: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=200)
+    day: Mapped[str | None] = mapped_column(String(10))
+    day_equity: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=200)
+    risk_halted: Mapped[bool] = mapped_column(default=False)
+    snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_bars: Mapped[dict] = mapped_column(JSON, default=dict)
+    last_error: Mapped[str | None] = mapped_column(String(240))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    journal_start_ms: Mapped[int | None] = mapped_column(BigInteger)
+    journal_cursor_ms: Mapped[int | None] = mapped_column(BigInteger)
+    net_flows: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=0)
+    ledger_warning: Mapped[str | None] = mapped_column(String(240))
+    baseline_cash: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
+    research_origin: Mapped[dict | None] = mapped_column(JSON)
+
+
+class TestnetOrder(Base):
+    __tablename__ = "testnet_orders"
+    __table_args__ = (UniqueConstraint("symbol", "bar_time", "action"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    link_id: Mapped[str] = mapped_column(String(36), unique=True)
+    symbol: Mapped[str] = mapped_column(String(24))
+    side: Mapped[str] = mapped_column(String(8))
+    action: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
+    bar_time: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(24), default="intent")
+    order_id: Mapped[str | None] = mapped_column(String(80))
+    filled_quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=0)
+    position_closed: Mapped[bool] = mapped_column(default=False)
+    average_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
+    fee: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=0)
+    cancel_requested: Mapped[bool] = mapped_column(default=False)
+    order_type: Mapped[str] = mapped_column(String(12), default="Market")
+    limit_price: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
+    opening_link_id: Mapped[str | None] = mapped_column(String(36))
+    closed_at_ms: Mapped[int | None] = mapped_column(BigInteger)
+    context: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(String(240))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+
+class TestnetPosition(Base):
+    __tablename__ = "testnet_positions"
+    symbol: Mapped[str] = mapped_column(String(24), primary_key=True)
+    side: Mapped[str] = mapped_column(String(8))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    mark_price: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    stop_loss: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=0)
+    opening_link_id: Mapped[str] = mapped_column(String(36))
+
+
+class TestnetExecution(Base):
+    __tablename__ = "testnet_executions"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    order_id: Mapped[str] = mapped_column(String(100), index=True)
+    link_id: Mapped[str] = mapped_column(String(36))
+    symbol: Mapped[str] = mapped_column(String(24))
+    side: Mapped[str] = mapped_column(String(8))
+    exec_type: Mapped[str] = mapped_column(String(40))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    price: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    fee: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    closed_size: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(60))
+    owned: Mapped[bool] = mapped_column(default=False)
+    opening_link_id: Mapped[str | None] = mapped_column(String(36))
+    sequence: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class TestnetLedger(Base):
+    __tablename__ = "testnet_ledger"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(60))
+    symbol: Mapped[str] = mapped_column(String(24))
+    order_id: Mapped[str] = mapped_column(String(100))
+    change: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    cash_flow: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    fee: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    funding: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    at_ms: Mapped[int] = mapped_column(BigInteger, index=True)
+    trade_id: Mapped[str | None] = mapped_column(String(100))

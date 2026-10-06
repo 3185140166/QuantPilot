@@ -1,4 +1,20 @@
 <script setup lang="ts">
+import ResearchDiagnostics from "./ResearchDiagnostics.vue";
+import { ElAlert } from "element-plus/es/components/alert/index.mjs";
+import { ElButton } from "element-plus/es/components/button/index.mjs";
+import { ElCheckbox } from "element-plus/es/components/checkbox/index.mjs";
+import { ElCollapse } from "element-plus/es/components/collapse/index.mjs";
+import { ElCollapseItem } from "element-plus/es/components/collapse/index.mjs";
+import { ElDatePicker } from "element-plus/es/components/date-picker/index.mjs";
+import { ElForm } from "element-plus/es/components/form/index.mjs";
+import { ElFormItem } from "element-plus/es/components/form/index.mjs";
+import { ElInputNumber } from "element-plus/es/components/input-number/index.mjs";
+import { ElOption } from "element-plus/es/components/select/index.mjs";
+import { ElProgress } from "element-plus/es/components/progress/index.mjs";
+import { ElSelect } from "element-plus/es/components/select/index.mjs";
+import { ElTable } from "element-plus/es/components/table/index.mjs";
+import { ElTableColumn } from "element-plus/es/components/table/index.mjs";
+import { ElTag } from "element-plus/es/components/tag/index.mjs";
 import {
   computed,
   onBeforeUnmount,
@@ -7,7 +23,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { request } from "../api";
 import type {
   Job,
@@ -394,7 +410,8 @@ onBeforeUnmount(() => {
           </h3>
           <span
             >搜索完成 {{ selected.completed_trials }} /
-            {{ selected.parameters.trials }} 次；搜索完成后继续验证候选</span
+            {{ selected.parameters.trials }}
+            次；搜索完成后继续验证和诊断候选</span
           >
         </div>
         <el-button
@@ -429,6 +446,10 @@ onBeforeUnmount(() => {
           ><template #default="{ row }"
             ><div class="candidate-details">
               <p>{{ ruleSummary(row.rules) }}</p>
+              <ResearchDiagnostics
+                :robustness="row.robustness"
+                :factors="row.factor_analysis"
+              />
               <p>
                 研究：{{
                   row.train_pass ? "通过" : row.reasons.join("；")
@@ -488,7 +509,7 @@ onBeforeUnmount(() => {
               link
               type="primary"
               :disabled="!row.eligible"
-              @click="promote(row)"
+              @click="promote(row as OptimizationCandidate)"
               >创建模拟策略</el-button
             ></template
           ></el-table-column

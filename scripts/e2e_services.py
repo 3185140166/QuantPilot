@@ -45,9 +45,10 @@ def main():
                 "--host",
                 "127.0.0.1",
                 "--port",
-                "8011",
+                environment.get("PLATFORM_E2E_API_PORT", "8011"),
             ],
             ["-m", "quantpilot.platform.engine"],
+            ["-m", "quantpilot.platform.testnet_worker"],
             ["-m", "quantpilot.platform.research_worker"],
         ]:
             children.append(

@@ -3,6 +3,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pandas as pd
@@ -40,8 +41,138 @@ TOKEN = "test-owner-token-" + "x" * 32
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
+def test_bybit_environment_switch_preserves_credentials_and_separates_databases(
+    platform, tmp_path, monkeypatch
+):
+    from dotenv import dotenv_values
+
+    from quantpilot.platform.environment import BybitEnvironment
+
+    _client, factory, market = platform
+    monkeypatch.delenv("BYBIT_TESTNET", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "BYBIT_TESTNET=true\nBYBIT_API_KEY=main-key\nBYBIT_API_SECRET=main-secret\nBYBIT_TESTNET_API_KEY=test-key\nBYBIT_TESTNET_API_SECRET=test-secret\nLIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING\nDRY_RUN=true\nTRADING_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    with factory() as db:
+        original_url = str(db.bind.url)
+    platform_path = tmp_path / ".env.platform"
+    platform_path.write_text(
+        f"DATABASE_URL={original_url}\nPLATFORM_MARKET_SOURCE=demo\n", encoding="utf-8"
+    )
+    settings = PlatformSettings(original_url, TOKEN, auth_enabled=True)
+    environment = BybitEnvironment(settings, tmp_path)
+    app = create_app(settings, market, environment=environment)
+    with TestClient(app) as web:
+        assert web.get("/api/bybit-environment").status_code == 401
+        initial = web.get("/api/bybit-environment", headers=AUTH).json()
+        assert initial["active"] == initial["selected"] == "testnet"
+        assert (
+            initial["testnet_credentials_configured"]
+            and initial["mainnet_credentials_configured"]
+        )
+        assert "main-key" not in str(initial) and "test-key" not in str(initial)
+        saved = web.post(
+            "/api/bybit-environment", headers=AUTH, json={"environment": "mainnet"}
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["restart_required"] and saved.json()["active"] == "testnet"
+        assert saved.json()["selected"] == "mainnet"
+        values = dotenv_values(env_path)
+        assert (
+            values["BYBIT_API_KEY"] == "main-key"
+            and values["BYBIT_TESTNET_API_KEY"] == "test-key"
+        )
+        assert values["DRY_RUN"] == "true" and values["TRADING_ENABLED"] == "false"
+        config = dotenv_values(platform_path)
+        main_url = config["DATABASE_URL"]
+        assert main_url != original_url
+        assert config["PLATFORM_BYBIT_TESTNET_DATABASE_URL"] == original_url
+        restarted = BybitEnvironment(PlatformSettings(main_url), tmp_path)
+        assert (
+            restarted.status()["active"] == "mainnet"
+            and not restarted.status()["restart_required"]
+        )
+        reverted = restarted.save(factory, "testnet")
+        assert reverted["restart_required"]
+        assert dotenv_values(platform_path)["DATABASE_URL"] == original_url
+        assert (
+            dotenv_values(platform_path)["PLATFORM_BYBIT_MAINNET_DATABASE_URL"]
+            == main_url
+        )
+    assert (
+        web.post(
+            "/api/bybit-environment", headers=AUTH, json={"environment": "invalid"}
+        ).status_code
+        == 422
+    )
+
+
+def test_bybit_environment_switch_rejects_active_work_without_writing_files(
+    platform, tmp_path, monkeypatch
+):
+    from quantpilot.platform.environment import BybitEnvironment, EnvironmentError
+
+    client, factory, _ = platform
+    monkeypatch.delenv("BYBIT_TESTNET", raising=False)
+    env_path = tmp_path / ".env"
+    text = "BYBIT_TESTNET=true\nLIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING\n"
+    env_path.write_text(text, encoding="utf-8")
+    with factory() as db:
+        url = str(db.bind.url)
+    environment = BybitEnvironment(PlatformSettings(url), tmp_path)
+    strategy_id = add_strategy(client)
+    start(client, strategy_id)
+    with pytest.raises(EnvironmentError, match="暂停"):
+        environment.save(factory, "mainnet")
+    assert env_path.read_text(encoding="utf-8") == text
+    assert not (tmp_path / ".env.platform").exists()
+
+
+def test_exchange_profile_is_frozen_until_process_restart(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BYBIT_TESTNET", raising=False)
+    path = tmp_path / ".env"
+    path.write_text("BYBIT_TESTNET=true\n", encoding="utf-8")
+    MarketService("exchange")
+    path.write_text("BYBIT_TESTNET=false\n", encoding="utf-8")
+    assert Settings.from_env(path).testnet is True
+
+
+def test_environment_save_rolls_back_when_second_file_cannot_be_written(
+    platform, tmp_path, monkeypatch
+):
+    from quantpilot.platform.environment import BybitEnvironment, EnvironmentError
+
+    _client, factory, _market = platform
+    monkeypatch.delenv("BYBIT_TESTNET", raising=False)
+    path = tmp_path / ".env"
+    original = "BYBIT_TESTNET=true\nBYBIT_API_KEY=main-key\nLIVE_TRADING_CONFIRM=I_UNDERSTAND_LIVE_TRADING\n"
+    path.write_text(original, encoding="utf-8")
+    with factory() as db:
+        url = str(db.bind.url)
+    environment = BybitEnvironment(PlatformSettings(url), tmp_path)
+    replace = Path.replace
+
+    def fail_platform_replace(self, target):
+        if Path(target).name == ".env.platform":
+            raise OSError("Permission denied")
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_platform_replace)
+    with pytest.raises(EnvironmentError):
+        environment.save(factory, "mainnet")
+    assert path.read_text(encoding="utf-8") == original
+    assert not (tmp_path / ".env.platform").exists()
+    assert not list(tmp_path.glob("*.switch.tmp"))
+
+
 class FakeMarket:
     source = "demo"
+
+    def exchange_settings(self, *_args):
+        return SimpleNamespace(testnet=True, binance_testnet=True)
 
     def __init__(self):
         self.offset = 0
@@ -965,7 +1096,7 @@ def test_paper_risk_exits_record_equity_and_drawdown(
         assert strategy.status == ("paused" if paused else "running")
         assert db.scalar(select(func.count()).select_from(PaperOrder)) == 2
         assert strategy.max_drawdown < 0
-    data = client.get("/api/strategies", headers=AUTH).json()[0]
+    data = client.get(f"/api/strategies/{strategy_id}/curve", headers=AUTH).json()
     assert len(data["curve"]) == 1
     if paused:
         assert (
@@ -1013,3 +1144,396 @@ def test_research_migration_preserves_existing_positions(tmp_path, monkeypatch):
             == 101
         )
     engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "symbol,interval", [("BTCUSDT", "15"), ("SOLUSDT", "60"), ("DOGEUSDT", "D")]
+)
+def test_demo_recent_and_history_are_identical(symbol, interval):
+    from quantpilot.platform.market import INTERVAL_MINUTES
+    from quantpilot.strategy import generate_signals
+
+    market = MarketService("demo")
+    _, recent = market.bars("bybit", symbol, interval, 240)
+    step = pd.Timedelta(minutes=INTERVAL_MINUTES[interval])
+    history = market.history(
+        "bybit",
+        symbol,
+        interval,
+        recent.timestamp.iloc[80],
+        recent.timestamp.iloc[-1] + step,
+        79,
+    )
+    pd.testing.assert_frame_equal(recent, history)
+    again = MarketService("demo").history(
+        "bybit",
+        symbol,
+        interval,
+        recent.timestamp.iloc[80],
+        recent.timestamp.iloc[-1] + step,
+        79,
+    )
+    pd.testing.assert_frame_equal(history, again)
+    pd.testing.assert_series_equal(
+        generate_signals(recent, volume_ratio=1.1),
+        generate_signals(history, volume_ratio=1.1),
+    )
+
+
+@pytest.mark.parametrize(
+    "risk,price,halt",
+    [
+        ({"stop_loss_pct": 1}, 98, False),
+        ({"take_profit_pct": 1}, 102, False),
+        ({"max_drawdown_pct": 0.1}, 98, True),
+    ],
+)
+def test_paused_positions_keep_protection_after_restart(
+    platform, monkeypatch, risk, price, halt
+):
+    client, factory, market = platform
+    strategy_id = add_strategy(client, fee_rate=0, slippage_bps=0, rules=risk)
+    start(client, strategy_id)
+    monkeypatch.setattr(
+        "quantpilot.platform.engine.generate_signal", lambda _, **kwargs: "LONG"
+    )
+    process_strategy(factory, strategy_id, market)
+    client.post(
+        f"/api/strategies/{strategy_id}/command", headers=AUTH, json={"action": "pause"}
+    )
+    with factory() as db:
+        url = str(db.bind.url)
+    engine, restarted = make_database(url)
+    market.price = price
+    process_strategy(restarted, strategy_id, market)
+    market.offset = 15
+    process_strategy(restarted, strategy_id, market)
+    with factory() as db:
+        assert db.get(Position, strategy_id) is None
+        assert db.get(Strategy, strategy_id).status == "paused"
+        assert db.get(Strategy, strategy_id).risk_halted is halt
+        assert db.scalar(select(func.count()).select_from(PaperOrder)) == 2
+    if halt:
+        assert (
+            client.post(
+                f"/api/strategies/{strategy_id}/command",
+                headers=AUTH,
+                json={"action": "start"},
+            ).status_code
+            == 409
+        )
+    engine.dispose()
+
+
+def test_pause_does_not_reverse_or_open_positions(platform, monkeypatch):
+    client, factory, market = platform
+    strategy_id = add_strategy(client)
+    start(client, strategy_id)
+    monkeypatch.setattr(
+        "quantpilot.platform.engine.generate_signal", lambda _, **kwargs: "LONG"
+    )
+    process_strategy(factory, strategy_id, market)
+    client.post(
+        f"/api/strategies/{strategy_id}/command", headers=AUTH, json={"action": "pause"}
+    )
+    market.offset = 15
+    monkeypatch.setattr(
+        "quantpilot.platform.engine.generate_signal", lambda _, **kwargs: "SHORT"
+    )
+    process_strategy(factory, strategy_id, market)
+    with factory() as db:
+        assert db.get(Position, strategy_id).side == "LONG"
+        assert db.scalar(select(func.count()).select_from(PaperOrder)) == 1
+    empty_id = add_strategy(client)
+    process_strategy(factory, empty_id, market)
+    with factory() as db:
+        assert db.get(Position, empty_id) is None
+
+
+def test_curve_is_on_demand_and_incrementally_updates_current_bar(
+    platform, monkeypatch
+):
+    client, factory, market = platform
+    strategy_id = add_strategy(client, fee_rate=0, slippage_bps=0)
+    start(client, strategy_id)
+    monkeypatch.setattr(
+        "quantpilot.platform.engine.generate_signal", lambda _, **kwargs: "LONG"
+    )
+    process_strategy(factory, strategy_id, market)
+    assert "curve" not in client.get("/api/strategies", headers=AUTH).json()[0]
+    path = f"/api/strategies/{strategy_id}/curve"
+    first = client.get(path, headers=AUTH).json()
+    cursor = first["curve"][-1]["id"]
+    market.price = 95
+    process_strategy(factory, strategy_id, market)
+    market.price = 100
+    process_strategy(factory, strategy_id, market)
+    same = client.get(path + f"?since_id={cursor}", headers=AUTH).json()
+    assert len(same["curve"]) == 1
+    assert same["curve"][0]["id"] == cursor
+    assert first["sampling"] == "bar" and first["drawdown_sampling"] == "poll"
+    with factory() as db:
+        assert db.get(Strategy, strategy_id).max_drawdown == Decimal("-0.005")
+    market.offset = 15
+    process_strategy(factory, strategy_id, market)
+    assert (
+        len(client.get(path + f"?since_id={cursor}", headers=AUTH).json()["curve"]) == 2
+    )
+    assert client.get(path + "?limit=1", headers=AUTH).json()["curve"][0]["id"] > cursor
+    assert client.get(path).status_code == 401
+    assert client.get("/api/strategies/999999/curve", headers=AUTH).status_code == 404
+
+
+def seed_archive_data(client, factory):
+    from quantpilot.platform.models import EquityPoint, OptimizationJob
+
+    strategy_id = add_strategy(client)
+    old = utcnow() - timedelta(days=120)
+    payload = {
+        "metrics": {"total_return": 0.1},
+        "curve": [{"timestamp": "2026-01-01", "equity": 1100}],
+        "trades": [],
+        "dataset": {"path": "storage/market/shared.parquet", "sha256": "preserved"},
+    }
+    with factory.begin() as db:
+        strategy = db.get(Strategy, strategy_id)
+        strategy.max_drawdown = Decimal("-0.05")
+        db.add_all(
+            [
+                EquityPoint(
+                    strategy_id=strategy_id,
+                    bar_time="old",
+                    equity=950,
+                    drawdown=-0.05,
+                    created_at=old,
+                ),
+                EquityPoint(
+                    strategy_id=strategy_id,
+                    bar_time="latest",
+                    equity=1000,
+                    drawdown=0,
+                    created_at=old,
+                ),
+                Event(strategy_id=None, message="old event", created_at=old),
+                Event(
+                    strategy_id=strategy_id,
+                    message="old strategy event",
+                    created_at=old,
+                ),
+                BacktestJob(
+                    status="completed",
+                    parameters={"source": "demo"},
+                    result=payload,
+                    completed_at=old,
+                ),
+                BacktestJob(
+                    status="running",
+                    parameters={"source": "demo"},
+                    result=payload,
+                    completed_at=old,
+                ),
+                OptimizationJob(
+                    status="completed",
+                    parameters={},
+                    result={"trials": [1], "dataset": payload["dataset"]},
+                    completed_at=old,
+                ),
+                OptimizationJob(
+                    status="running",
+                    parameters={},
+                    result={"trials": [1]},
+                    completed_at=old,
+                ),
+            ]
+        )
+    return strategy_id, payload
+
+
+def test_archive_verified_exports_preserve_summary_and_history(
+    platform, tmp_path, monkeypatch
+):
+    import hashlib
+    import json
+
+    from quantpilot.platform.models import EquityPoint, OptimizationJob
+
+    client, factory, _ = platform
+    monkeypatch.chdir(tmp_path)
+    strategy_id, payload = seed_archive_data(client, factory)
+    shared = Path("storage/market/shared.parquet")
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(b"shared market snapshot")
+    preview_path = "/api/maintenance/archive/preview"
+    assert client.post(preview_path, json={"retention_days": 90}).status_code == 401
+    plan = client.post(preview_path, headers=AUTH, json={"retention_days": 90}).json()
+    assert plan["counts"] == {
+        "equity": 1,
+        "events": 2,
+        "backtests": 1,
+        "optimizations": 1,
+    }
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(EquityPoint)) == 2
+    done = client.post(
+        "/api/maintenance/archive/execute", headers=AUTH, json={"id": plan["id"]}
+    )
+    assert done.status_code == 200, done.text
+    manifest = json.loads(Path(done.json()["manifest"]).read_text(encoding="utf-8"))
+    for ref in manifest["files"]:
+        assert (
+            hashlib.sha256(Path(ref["path"]).read_bytes()).hexdigest() == ref["sha256"]
+        )
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(EquityPoint)) == 1
+        assert db.get(Strategy, strategy_id).max_drawdown == Decimal("-0.05")
+        assert db.get(BacktestJob, 2).result == payload
+        assert db.get(OptimizationJob, 2).result == {"trials": [1]}
+    assert client.get("/api/backtests/1", headers=AUTH).json()["result"] == payload
+    assert (
+        client.get("/api/backtests", headers=AUTH).json()[1]["summary"]
+        == payload["metrics"]
+    )
+    assert client.get("/api/optimizations/1", headers=AUTH).json()["result"][
+        "trials"
+    ] == [1]
+    assert shared.read_bytes() == b"shared market snapshot"
+    promoted = client.post(
+        "/api/backtests/1/promote",
+        headers=AUTH,
+        json={"name": "Archived configuration"},
+    )
+    assert promoted.status_code == 201
+    assert promoted.json()["origin_job_id"] == 1
+    assert (
+        client.post(
+            "/api/maintenance/archive/execute", headers=AUTH, json={"id": plan["id"]}
+        ).status_code
+        == 409
+    )
+    again = client.post(preview_path, headers=AUTH, json={"retention_days": 90}).json()
+    assert sum(again["counts"].values()) == 0
+    ref = next(ref for ref in manifest["files"] if ref["kind"] == "backtests")
+    Path(ref["path"]).write_bytes(b"corrupted")
+    assert client.get("/api/backtests/1", headers=AUTH).status_code == 409
+
+
+def test_unfinished_demo_candle_evolves_without_changing_closed_history():
+    from quantpilot.platform.market import demo_bars, validate_market
+
+    times = pd.date_range("2026-01-01", periods=5, freq="15min", tz="UTC")
+    earlier = demo_bars("BTCUSDT", times, 15, times[-1] + pd.Timedelta(minutes=3))
+    later = demo_bars("BTCUSDT", times, 15, times[-1] + pd.Timedelta(minutes=12))
+    final = demo_bars("BTCUSDT", times, 15)
+    pd.testing.assert_frame_equal(earlier.iloc[:-1], later.iloc[:-1])
+    pd.testing.assert_frame_equal(earlier.iloc[:-1], final.iloc[:-1])
+    assert earlier.iloc[-1].close != later.iloc[-1].close
+    assert earlier.iloc[-1].volume < later.iloc[-1].volume < final.iloc[-1].volume
+    assert later.iloc[-1].close == pytest.approx(
+        final.iloc[-1].open + (final.iloc[-1].close - final.iloc[-1].open) * 0.8
+    )
+    validate_market(earlier)
+    validate_market(later)
+
+
+def test_archive_expired_previews_and_path_escape_are_rejected(
+    platform, tmp_path, monkeypatch
+):
+    import json
+
+    from quantpilot.platform import archive
+
+    client, factory, _ = platform
+    monkeypatch.chdir(tmp_path)
+    seed_archive_data(client, factory)
+    plan = archive.preview(factory, 90)
+    path = archive.root_path() / "plans" / f"{plan['id']}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["created_at"] = (utcnow() - timedelta(hours=2)).isoformat()
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert (
+        client.post(
+            "/api/maintenance/archive/execute", headers=AUTH, json={"id": plan["id"]}
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            "/api/maintenance/archive/execute",
+            headers=AUTH,
+            json={"id": "../../escape"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/maintenance/archive/preview", headers=AUTH, json={"retention_days": 1}
+        ).status_code
+        == 422
+    )
+    with pytest.raises(archive.ArchiveError):
+        archive.load_result({"archived_result": {"path": "../escape", "sha256": "x"}})
+
+
+def test_archive_concurrent_execution_cannot_duplicate_deletions(
+    platform, tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from quantpilot.platform import archive
+    from quantpilot.platform.models import EquityPoint
+
+    client, factory, _ = platform
+    monkeypatch.chdir(tmp_path)
+    seed_archive_data(client, factory)
+    plan = archive.preview(factory, 90)
+
+    def run_archive():
+        try:
+            archive.execute(factory, plan["id"])
+            return "completed"
+        except archive.ArchiveError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(run_archive) for _ in range(2)]
+        assert sorted(future.result() for future in futures) == [
+            "completed",
+            "rejected",
+        ]
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(EquityPoint)) == 1
+
+
+@pytest.mark.parametrize("failure", ["changed", "write", "verify"])
+def test_archive_failures_preserve_database(platform, tmp_path, monkeypatch, failure):
+    from quantpilot.platform import archive
+    from quantpilot.platform.models import EquityPoint
+
+    client, factory, _ = platform
+    monkeypatch.chdir(tmp_path)
+    seed_archive_data(client, factory)
+    plan = archive.preview(factory, 90)
+    if failure == "changed":
+        with factory.begin() as db:
+            db.get(EquityPoint, 1).equity = 940
+    elif failure == "write":
+
+        def fail(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(pd.DataFrame, "to_parquet", fail)
+    else:
+        monkeypatch.setattr(pd, "read_parquet", lambda _: pd.DataFrame([{"id": -1}]))
+    with pytest.raises((archive.ArchiveError, OSError)):
+        archive.execute(factory, plan["id"])
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(EquityPoint)) == 2
+        assert "archived_result" not in db.get(BacktestJob, 1).result
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(Event)
+                .where(Event.message == "old event")
+            )
+            == 1
+        )

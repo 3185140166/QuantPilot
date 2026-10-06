@@ -14,8 +14,10 @@ from sqlalchemy import select
 from quantpilot.backtest import run_backtest
 from quantpilot.metrics import report
 
+from .data_quality import candle_audit, environment_tag
 from .database import make_database
 from .engine import guard_lease
+from .factor_research import ablation, analyze
 from .leases import release_lease, renew_lease
 from .market import HistoryError, MarketService
 from .models import BacktestJob, OptimizationJob, utcnow
@@ -63,6 +65,26 @@ def process_job(factory, market, owner):
     try:
         if params["source"] != market.source:
             raise ValueError("Backtest source differs from worker configuration")
+        market_environment = (
+            environment_tag(
+                market,
+                params.get("exchange", "bybit"),
+                params.get("symbol", "BTCUSDT"),
+                params.get("interval", "15"),
+                params.get("market_environment"),
+            )
+            if model is BacktestJob
+            else None
+        )
+        if (
+            model is BacktestJob
+            and market.source == "exchange"
+            and params.get("market_environment") not in {"testnet", "mainnet"}
+        ):
+            params["market_environment"] = market_environment
+            with factory.begin() as db:
+                guard_lease(db, "research", owner)
+                db.get(BacktestJob, job_id).parameters = params.copy()
         stop_heartbeat = ThreadEvent()
 
         def heartbeat():
@@ -77,6 +99,19 @@ def process_job(factory, market, owner):
         heartbeat_thread.start()
         if model is OptimizationJob:
             run_optimization(factory, market, owner, job_id)
+            return
+        if params.get("job_type") == "portfolio":
+            from .portfolio_research import execute
+
+            payload = execute(factory, market, owner, job_id, params)
+            with factory.begin() as db:
+                guard_lease(db, "research", owner)
+                job = db.get(BacktestJob, job_id)
+                job.result, job.status, job.completed_at = (
+                    payload,
+                    "completed",
+                    utcnow(),
+                )
             return
         rules = StrategyRules.model_validate(params.get("rules", {}))
         if params.get("start_at"):
@@ -110,6 +145,7 @@ def process_job(factory, market, owner):
             rules=rules.model_dump(),
             max_notional=params.get("max_notional", 1000),
             trade_start=params.get("start_at"),
+            risk_sizing=params.get("risk_sizing"),
         )
         trades = []
         for trade in result.trades:
@@ -119,7 +155,46 @@ def process_job(factory, market, owner):
                 str(item["exit_time"]),
             )
             trades.append(item)
+        factor_analysis = analyze(
+            bars,
+            rules.model_dump(),
+            start_at=params.get("start_at"),
+            end_at=params.get("end_at"),
+            fee_rate=params["fee_rate"],
+            slippage_bps=params["slippage_bps"],
+        )
+
+        def compare_filters(candidate_rules):
+            return report(
+                run_backtest(
+                    bars,
+                    **{
+                        key: params[key]
+                        for key in [
+                            "initial_equity",
+                            "quantity",
+                            "fee_rate",
+                            "slippage_bps",
+                        ]
+                    },
+                    rules=candidate_rules,
+                    max_notional=params.get("max_notional", 1000),
+                    trade_start=factor_analysis.get("split_at"),
+                    risk_sizing=params.get("risk_sizing"),
+                )
+            )
+
+        factor_analysis["ablation"] = (
+            ablation(rules.model_dump(), compare_filters)
+            if factor_analysis.get("split_at")
+            else []
+        )
         payload = {
+            "factor_analysis": factor_analysis,
+            "data_quality": {
+                **candle_audit(bars, params["interval"]),
+                "market_environment": market_environment,
+            },
             "metrics": report(result),
             "trades": trades,
             "source": market.source,
@@ -127,6 +202,7 @@ def process_job(factory, market, owner):
             "rules": rules.model_dump(),
             "risk_halted": result.risk_halted,
             "rejected_entries": result.rejected_entries,
+            "risk_summary": result.risk_summary,
             "dataset": {
                 "path": str(dataset),
                 "sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),

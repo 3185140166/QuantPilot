@@ -47,6 +47,13 @@ services:
       migration:
         condition: service_completed_successfully
     restart: unless-stopped
+  testnet:
+    <<: *platform
+    command: [python, -m, quantpilot.platform.testnet_worker]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
   research:
     <<: *platform
     command: [python, -m, quantpilot.platform.research_worker]

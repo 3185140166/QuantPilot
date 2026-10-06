@@ -2,10 +2,60 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import uuid
+from types import MethodType
 from typing import Any
 
 from ..config import Settings
+
+
+def synchronize_request_clock(session):
+    """Sign private requests against exchange time using a monotonic clock.
+
+    The hook belongs to this session only; public requests remain unauthenticated.
+    A failed time request prevents signing rather than falling back to a bad clock.
+    """
+    lock = threading.Lock()
+    anchor = None
+
+    def headers(client, payload, recv_window, content_type="application/json"):
+        nonlocal anchor
+        with lock:
+            now = time.monotonic()
+            if anchor is None or now - anchor[1] >= 60:
+                for _ in range(3):
+                    before = time.monotonic()
+                    response = client.get_server_time()
+                    after = time.monotonic()
+                    if after - before <= 4:
+                        break
+                else:
+                    raise RuntimeError("Bybit time request is too slow; retry later")
+                if response.get("retCode") != 0:
+                    raise RuntimeError("Cannot synchronize Bybit request time")
+                server_ms = int(
+                    response.get("time")
+                    or int(response["result"]["timeNano"]) // 1_000_000
+                )
+                # Do not guess one-way latency: a conservative timestamp never
+                # exceeds the exchange's strict +1000 ms future bound.
+                anchor = (server_ms - 100, after)
+            timestamp = int(anchor[0] + (time.monotonic() - anchor[1]) * 1000)
+        sign = (client._auth_binary if isinstance(payload, bytes) else client._auth)(
+            payload, recv_window, timestamp
+        )
+        return {
+            "Content-Type": content_type,
+            "X-BAPI-API-KEY": client.api_key,
+            "X-BAPI-SIGN": sign,
+            "X-BAPI-SIGN-TYPE": "2",
+            "X-BAPI-TIMESTAMP": str(timestamp),
+            "X-BAPI-RECV-WINDOW": str(recv_window),
+        }
+
+    session._prepare_headers = MethodType(headers, session)
 
 
 class BybitClient:
@@ -21,7 +71,10 @@ class BybitClient:
             testnet=settings.testnet,
             api_key=settings.api_key,
             api_secret=settings.api_secret,
+            force_retry=False,
+            log_requests=False,
         )
+        synchronize_request_clock(self.session)
 
     @staticmethod
     def _check(response: dict[str, Any]) -> dict[str, Any]:
@@ -54,6 +107,50 @@ class BybitClient:
             category=self.settings.category, symbol=self.settings.symbol
         )
         return self._check(response)["result"]["list"][0]
+
+    def get_mark_klines(self, start: int, end: int, limit: int = 1000):
+        return self._check(
+            self.session.get_mark_price_kline(
+                category="linear",
+                symbol=self.settings.symbol,
+                interval=self.settings.interval,
+                start=start,
+                end=end,
+                limit=limit,
+            )
+        )["result"]["list"]
+
+    def get_funding_history(self, start: int, end: int, limit: int = 200):
+        return self._check(
+            self.session.get_funding_rate_history(
+                category="linear",
+                symbol=self.settings.symbol,
+                startTime=start,
+                endTime=end,
+                limit=limit,
+            )
+        )["result"]["list"]
+
+    def get_risk_limits(self):
+        rows, cursor, seen = [], "", set()
+        for _ in range(50):
+            result = self._check(
+                self.session.get_risk_limit(
+                    category="linear",
+                    symbol=self.settings.symbol,
+                    **({"cursor": cursor} if cursor else {}),
+                )
+            )["result"]
+            rows.extend(
+                row for row in result["list"] if row["symbol"] == self.settings.symbol
+            )
+            cursor = result.get("nextPageCursor", "")
+            if not cursor:
+                return rows
+            if cursor in seen:
+                raise ValueError("Repeated risk-limit cursor")
+            seen.add(cursor)
+        raise ValueError("Risk-limit pagination exceeded limit")
 
     def get_instruments(self) -> list[dict[str, Any]]:
         """Read every instruments page; the linear catalog exceeds one page."""

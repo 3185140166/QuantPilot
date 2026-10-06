@@ -32,11 +32,15 @@ class StrategyRules(BaseModel):
     atr_pct_max: float = Field(default=0, ge=0, le=100)
     adx_period: int = Field(default=14, ge=2, le=100)
     adx_min: float = Field(default=0, ge=0, le=100)
+    hourly_trend_filter: bool = False
+    hourly_min_gap_pct: float = Field(default=0.05, ge=0, le=5)
 
     @model_validator(mode="after")
     def validate_order(self):
         if self.fast >= self.slow or self.rsi_lower >= self.rsi_upper:
             raise ValueError("快 EMA 必须小于慢 EMA，RSI 下限必须小于上限")
+        if self.hourly_trend_filter and self.slow > 200:
+            raise ValueError("1小时方向过滤的慢EMA最多200，保证运行时预热数据足够")
         return self
 
     @property
